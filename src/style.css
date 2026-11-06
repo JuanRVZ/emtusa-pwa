@@ -231,3 +231,20 @@ html, body { height:100%; min-height:100dvh; }
 #lsheet { padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
 #status { top:calc(env(safe-area-inset-top) + 150px); }
 
+
+/* pantalla de alarmas */
+#alsheet { z-index:1003; max-height:82dvh; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+#alsheet .head { padding-top:0; }
+.algroup { background:var(--solid); border-radius:16px; padding:14px; margin-top:12px; }
+.algroup h3 { margin:0 0 4px; font-size:16px; font-weight:700; }
+.algroup p { margin:0 0 12px; color:var(--mut); font-size:13.5px; line-height:1.4; }
+.algrid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.algroup .opt { padding:12px 6px; border:0; border-radius:12px; background:var(--fill); color:var(--fg); font:700 16px var(--font); transition:transform .12s; }
+.algroup .opt:active, .algroup .primary:active { transform:scale(.97); }
+.algroup .opt.on { background:var(--blue); color:#fff; }
+.algroup .primary { width:100%; padding:13px; border:0; border-radius:12px; background:var(--blue); color:#fff; font:700 15px var(--font); }
+.algroup .primary.on { background:var(--green); }
+.algroup .primary:disabled, .algroup select:disabled, .algroup input:disabled { opacity:.4; }
+.alfield { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 0; border-bottom:.5px solid var(--sep); font-size:15px; }
+.alfield select, .alfield input { font:600 15px var(--font); padding:8px 10px; border:0; border-radius:10px; background:var(--fill); color:var(--fg); min-width:0; max-width:60%; }
+.algroup .primary:last-child { margin-top:12px; }

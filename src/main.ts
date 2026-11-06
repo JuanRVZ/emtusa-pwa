@@ -87,6 +87,7 @@ let stopMarkers: L.CircleMarker[] = [];
 let refreshTimer: number | undefined;
 
 function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
+  alClose();
   const linea = lineaDe.get(code); if (!linea) return;
   closeStopSheet(); routeLayer.clearLayers(); clearLine();
   let dir = opts.dir ?? mineStore[code]?.dir ?? 0;
@@ -114,6 +115,7 @@ function clearLine() {
 }
 
 function closeLine() {
+  alClose();
   sel = null; clearLine(); clearInterval(refreshTimer);
   $('lsheet').hidden = true;
   document.querySelectorAll('.chip').forEach((c) => c.classList.remove('on')); chips.classList.remove('has-sel');
@@ -143,6 +145,7 @@ function paintMinutes() {
 }
 
 function setDir(d: number) {
+  alClose();
   if (!sel || d === sel.dir) return;
   const linea = sel.linea; const route = new Route(linea.recorridos[d], byCode);
   const mine = mineStore[linea.codigo]?.dir === d ? mineStore[linea.codigo].code : null;
@@ -165,6 +168,7 @@ function focusAbove(ll: [number, number]) {
 }
 
 function clearMine() {
+  alClose();
   if (!sel) return; sel.mine = null; delete mineStore[sel.linea.codigo]; localStorage.setItem('mine', JSON.stringify(mineStore));
   updateMineMarker(); renderPanel();
 }
@@ -317,15 +321,61 @@ function leaveHtml(p: Parada, idx: number, arr: LlegadaLinea[]): string {
   return `<div class="leave bad">❌ No alcanzas este bus <small>(${w.min} min andando, llega en ${bus})</small>${n2 !== null && n2 - w.min >= 0 ? `<br>El siguiente, en ${n2} min, sí` : ''}</div>`;
 }
 
-let mOpen = false;
 let repDays = '1,2,3,4,5'; let repTime = '08:00'; let repMin = 5;
-function cloudHtml(): string {
-  if (!pushSupported()) return /iPhone|iPad/.test(navigator.userAgent) ? '<div class="leave">☁️ Para avisos con la app cerrada, añádela a la pantalla de inicio (Compartir → Añadir a pantalla de inicio)</div>' : '';
-  if (!getPushId()) return '<div class="alrow"><span>☁️ Aunque cierre la app</span><div class="alopts"><button data-act="pushon">Activar</button></div></div>';
+
+// ---------- Pantalla "Alarmas y avisos" ----------
+const alActive = () => !!alarm && !!sel && alarm.code === sel.mine && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir;
+function alOpen() { if (!sel?.mine) return; $('alsheet').hidden = false; renderAlPanel(); $('alsheet').scrollTop = 0; }
+function alClose() { $('alsheet').hidden = true; }
+function renderAlPanel() {
+  const el = $('alsheet'); if (el.hidden) return;
+  if (!sel?.mine) { alClose(); return; }
+  const body = $('albody'); const ae = document.activeElement as HTMLElement | null;
+  if (ae && body.contains(ae) && /^(SELECT|INPUT)$/.test(ae.tagName)) return; // no pisar lo que se está editando
+  const p = byCode.get(sel.mine)!; $('alsub').textContent = `${p.nombre} · Línea ${sel.linea.codigo}`;
+  const supported = pushSupported(); const on = !!getPushId();
   const o = (v: string, t: string) => `<option value="${v}" ${repDays === v ? 'selected' : ''}>${t}</option>`;
-  return `<div class="alrow"><span>☁️ Avisos en la nube activados</span><div class="alopts"><button data-act="pushtest">Probar</button></div></div>
-    <div class="alrow rep"><span>🔁 Repetir</span><div class="alopts"><select id="rdays" aria-label="Días">${o('1,2,3,4,5', 'L–V')}${o('0,1,2,3,4,5,6', 'Todos')}${o('0,6', 'Fin de semana')}</select><input type="time" id="rtime" value="${repTime}" aria-label="Hora" /><select id="rmin" aria-label="Minutos de antelación">${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button data-act="repeat">Crear</button></div></div>`;
+  const cloud = !supported
+    ? `<p>${/iPhone|iPad/.test(navigator.userAgent) ? 'En iPhone, añade primero la app a la pantalla de inicio (Compartir → Añadir a pantalla de inicio) y ábrela desde el icono.' : 'Este navegador no admite avisos con la app cerrada.'}</p>`
+    : on ? '<p>✅ Activados en este dispositivo. Las alarmas sonarán aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushtest">Enviarme una prueba</button>'
+    : '<p>Para que las alarmas suenen aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushon">Activar avisos en la nube</button>';
+  body.innerHTML = `
+    <div class="algroup"><h3>🔔 Avisarme cuando mi bus esté cerca</h3><p>Te aviso cuando falten estos minutos para que llegue a tu parada.${on ? ' También suena con la app cerrada.' : ' Mantén la app abierta (o activa los avisos en la nube más abajo).'}</p>
+      <div class="algrid">${[2, 5, 10].map((m) => `<button class="opt ${isMyAlarm(m) ? 'on' : ''}" data-m="${m}">${m} min</button>`).join('')}</div></div>
+    <div class="algroup"><h3>🛑 Me bajo aquí</h3><p>Ya dentro del bus, te aviso antes de llegar a tu parada usando el GPS. Mantén la app abierta y la ubicación activada.</p>
+      <button class="primary ${isGetOff() ? 'on' : ''}" data-act="getoff">${isGetOff() ? '✓ Activado · toca para cancelar' : 'Avisarme al acercarme'}</button></div>
+    <div class="algroup"><h3>☁️ Avisos con la app cerrada</h3>${cloud}</div>
+    <div class="algroup"><h3>🔁 Repetir cada día</h3><p>${on ? 'Crea una alarma que se repite sola, por ejemplo de lunes a viernes para tu trayecto de siempre. Vigila el bus durante 40 minutos desde la hora elegida.' : 'Primero activa los avisos en la nube (bloque de arriba) para poder repetir alarmas.'}</p>
+      <label class="alfield">Días <select id="rdays" ${on ? '' : 'disabled'}>${o('1,2,3,4,5', 'Lunes a viernes')}${o('0,1,2,3,4,5,6', 'Todos los días')}${o('0,6', 'Fin de semana')}</select></label>
+      <label class="alfield">Desde las <input type="time" id="rtime" value="${repTime}" ${on ? '' : 'disabled'} /></label>
+      <label class="alfield">Avisar a <select id="rmin" ${on ? '' : 'disabled'}>${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select></label>
+      <button class="primary" data-act="repeat" ${on ? '' : 'disabled'}>Crear alarma repetida</button></div>`;
 }
+$('alclose').onclick = alClose;
+
+// acciones comunes de la tarjeta "Mi parada" y de la pantalla de alarmas
+async function handleAction(t: HTMLElement) {
+  const b = t.closest('button[data-m]') as HTMLElement | null; if (b) { toggleAlarm(+b.dataset.m!); return; }
+  const a2 = (t.closest('button[data-act]') as HTMLElement | null)?.dataset.act;
+  if (a2 === 'geo') { geoOn = true; try { localStorage.setItem('geoOn', '1'); } catch { /* ignorar */ } await updateUserPos(); if (!userPos) toast('No pude obtener tu ubicación'); }
+  else if (a2 === 'alopen') alOpen();
+  else if (a2 === 'pushtest') { try { await testPush(); toast('Enviado: debería llegarte en unos segundos'); } catch (err) { toast((err as Error).message); } }
+  else if (a2 === 'getoff') { toggleGetOff(); renderAlPanel(); }
+  else if (a2 === 'pushon') { try { await enablePush(); toast('Avisos en la nube activados ✓'); updateMine(); renderAlPanel(); loadHomeAlarms(); } catch (err) { toast((err as Error).message); } }
+  else if (a2 === 'repeat' && sel?.mine) {
+    try {
+      const p0 = byCode.get(sel.mine)!;
+      await createAlarm({ linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, name: p0.nombre, min: repMin, kind: 'weekly', days: repDays, time: repTime });
+      toast(`Alarma creada: ${repDays === '1,2,3,4,5' ? 'L–V' : repDays === '0,6' ? 'fines de semana' : 'todos los días'} desde las ${repTime}`); loadHomeAlarms();
+    } catch (err) { toast((err as Error).message); }
+  }
+}
+$('mine').addEventListener('click', (e) => void handleAction(e.target as HTMLElement));
+$('albody').addEventListener('click', (e) => void handleAction(e.target as HTMLElement));
+$('albody').addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement | HTMLSelectElement;
+  if (t.id === 'rdays') repDays = t.value; else if (t.id === 'rtime') repTime = t.value || repTime; else if (t.id === 'rmin') repMin = +t.value;
+});
 
 function updateMine() {
   const box = $('mine'); if (!sel?.mine) { box.hidden = true; return; }
@@ -346,39 +396,16 @@ function updateMine() {
   box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
     ${leaveHtml(p, sel.route.stops.findIndex((x) => x.codigo === p.codigo), arr)}
-    <button class="moptsb" data-act="mopts" aria-expanded="${mOpen}">🔔 Alarmas y avisos <span>${mOpen ? '▴' : '▾'}</span></button><div class="mopts" ${mOpen ? '' : 'hidden'}>
-    <div class="alrow"><span>🔔 Avisarme a</span><div class="alopts">${[2, 5, 10].map((m) => `<button data-m="${m}" class="${isMyAlarm(m) ? 'on' : ''}">${m} min</button>`).join('')}</div></div>
-    <div class="alrow"><span>🛑 Me bajo aquí</span><div class="alopts"><button data-act="getoff" class="${isGetOff() ? 'on' : ''}">${isGetOff() ? 'Activado' : 'Avisar'}</button></div></div>
-    ${cloudHtml()}</div>`;
+    <button class="moptsb" data-act="alopen">🔔 Alarmas y avisos${alActive() ? ' · <b>activa</b>' : ''} <span>›</span></button>`;
   $('mclear').onclick = clearMine;
   $('mshare').onclick = async () => {
     const url = `${location.origin}/?l=${encodeURIComponent(sel!.linea.codigo)}&d=${sel!.dir}&p=${p.codigo}`;
     const text = `Línea ${sel!.linea.codigo} en ${p.nombre}`;
     try { if (navigator.share) await navigator.share({ title: 'Bus Huelva', text, url }); else { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } } catch { /* cancelado */ }
   };
-  box.onclick = async (e) => {
-    const t = e.target as HTMLElement;
-    const b = t.closest('button[data-m]') as HTMLElement | null; if (b) { toggleAlarm(+b.dataset.m!); return; }
-    const a2 = (t.closest('button[data-act]') as HTMLElement | null)?.dataset.act;
-    if (a2 === 'geo') { geoOn = true; try { localStorage.setItem('geoOn', '1'); } catch { /* ignorar */ } await updateUserPos(); if (!userPos) toast('No pude obtener tu ubicación'); }
-    else if (a2 === 'pushtest') { try { await testPush(); toast('Enviado: debería llegarte en unos segundos'); } catch (err) { toast((err as Error).message); } }
-    else if (a2 === 'mopts') { mOpen = !mOpen; updateMine(); }
-    else if (a2 === 'getoff') toggleGetOff();
-    else if (a2 === 'pushon') { try { await enablePush(); toast('Avisos en la nube activados ✓'); updateMine(); loadHomeAlarms(); } catch (err) { toast((err as Error).message); } }
-    else if (a2 === 'repeat' && sel?.mine) {
-      try {
-        const p0 = byCode.get(sel.mine)!;
-        await createAlarm({ linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, name: p0.nombre, min: repMin, kind: 'weekly', days: repDays, time: repTime });
-        toast(`Alarma creada: ${repDays === '1,2,3,4,5' ? 'L–V' : repDays === '0,6' ? 'fines de semana' : 'todos los días'} desde las ${repTime}`); loadHomeAlarms();
-      } catch (err) { toast((err as Error).message); }
-    }
-  };
 }
-$('mine').addEventListener('change', (e) => {
-  const t = e.target as HTMLInputElement | HTMLSelectElement;
-  if (t.id === 'rdays') repDays = t.value; else if (t.id === 'rtime') repTime = t.value || repTime; else if (t.id === 'rmin') repMin = +t.value;
-});
-setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
+
+setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); renderAlPanel(); } }, 5000);
 
 // teclado y VoiceOver: Enter o espacio activan filas y el selector de altura
 document.addEventListener('keydown', (e) => {
@@ -457,7 +484,7 @@ function toggleAlarm(min: number) {
 
 function saveAlarm() {
   try { if (alarm) localStorage.setItem('alarm', JSON.stringify(alarm)); else localStorage.removeItem('alarm'); } catch { /* ignorar */ }
-  paintAlarm(); manageWake(); updateMine();
+  paintAlarm(); manageWake(); updateMine(); renderAlPanel();
   clearInterval(alarmTimer); if (alarm) alarmTimer = window.setInterval(alarmCheck, alarm.kind === 'getoff' ? 8000 : 15000);
 }
 
