@@ -1,8 +1,9 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './style.css';
-import { buildGraph, plan, dist, type Pt, type Plan, type Parada } from './planner';
+import { buildGraph, planAll, dist, PROFILES, type Pt, type Plan, type Parada } from './planner';
 import { Route, type Rec } from './route';
+import { pushSupported, getPushId, enablePush, createAlarm, deleteAlarm, listAlarms, type ServerAlarm } from './push';
 
 type Linea = { codigo: string; nombre: string; color: string; recorridos: Rec[] };
 type Llegada = { linea: string; colorLinea: string; hora: string; enVivo: boolean; fiabilidad: number; poste: string };
@@ -158,7 +159,7 @@ async function refreshLive() {
   liveOk = buses !== null;
   if (buses) ingestBuses(buses);
   if (llg) { arrivals = new Map(); for (const a of llg) { const l = arrivals.get(a.parada) ?? []; l.push(a); arrivals.set(a.parada, l); } }
-  renderPanel(); updateMine(); paintMinutes();
+  renderPanel(); updateMine(); paintMinutes(); updateUserPos();
 }
 
 function newTracked(s: number): Tracked {
@@ -245,7 +246,7 @@ function renderPanel() {
   route.stops.forEach((p, i) => {
     const e = etaFor(i);
     const et = e ? `<span class="et ${e.src}">${e.txt}</span>` : '<span class="et none">—</span>';
-    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}" style="--c:${linea.color}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
+    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}" style="--c:${linea.color}" role="button" tabindex="0" aria-pressed="${sel!.mine === p.codigo}" aria-label="${esc(p.nombre)}${e ? ', ' + (e.src === 'plan' ? 'horario ' + e.txt : e.txt.replace('~', 'aproximadamente ').replace(' min', ' minutos')) : ''}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
       rows.push(`<li class="brow" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
   });
@@ -256,8 +257,52 @@ function renderPanel() {
 
 function scrollToMine() { document.querySelector('#slist .srow.mine')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
 
+// ---------- ¿Llego a tiempo? (ubicación del usuario) ----------
+let userPos: Pt | null = null; let geoOn = false;
+try { geoOn = localStorage.getItem('geoOn') === '1'; } catch { geoOn = false; }
+function getPos(): Promise<Pt | null> {
+  return new Promise((ok) => {
+    if (!navigator.geolocation) return ok(null);
+    navigator.geolocation.getCurrentPosition((q) => ok({ lat: q.coords.latitude, lon: q.coords.longitude }), () => ok(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 });
+  });
+}
+async function updateUserPos() { if (!geoOn) return; const q = await getPos(); if (q) { userPos = q; if (sel?.mine) updateMine(); } }
+const walkCache = new Map<string, { m: number; s: number }>(); const walkPending = new Set<string>();
+function walkInfo(p: Parada): { m: number; min: number } {
+  const key = `${p.codigo}|${userPos!.lat.toFixed(4)},${userPos!.lon.toFixed(4)}`; const c = walkCache.get(key);
+  if (c) return { m: Math.round(c.m), min: Math.max(1, Math.round(c.s / 60)) };
+  if (!walkPending.has(key)) {
+    walkPending.add(key);
+    fetch(`/walk?a=${userPos!.lat},${userPos!.lon}&b=${p.lat},${p.lon}`).then((r) => r.json()).then((j: { routes?: { distance: number; duration: number }[] }) => {
+      const r = j.routes?.[0]; if (r) { walkCache.set(key, { m: r.distance, s: r.duration }); updateMine(); }
+    }).catch(() => { /* se queda la estimación en línea recta */ });
+  }
+  const m = Math.round(dist(userPos!, p) * 1.3); return { m, min: Math.max(1, Math.round(m / 75)) };
+}
+function leaveHtml(p: Parada, idx: number, arr: LlegadaLinea[]): string {
+  if (!userPos) return `<div class="leave"><button data-act="geo">📍 ¿Llego a tiempo? Usar mi ubicación</button></div>`;
+  const w = walkInfo(p); const e = etaFor(idx); const bus = e && e.src !== 'plan' ? e.min : null;
+  if (w.m < 40) return '<div class="leave ok">📍 Ya estás en la parada</div>';
+  if (bus === null) return `<div class="leave">🚶 Estás a ${w.min} min andando (${fmtDist(w.m)})</div>`;
+  const margin = bus - w.min;
+  if (margin >= 3) return `<div class="leave ok">✅ Llegas con ${margin} min de margen · sal en ${margin - 1} min <small>(${w.min} min andando)</small></div>`;
+  if (margin >= 0) return `<div class="leave warn">⚠️ Justo: sal ya <small>(${w.min} min andando, bus en ${bus} min)</small></div>`;
+  const n2 = arr[1] ? mins(arr[1].hora) : null;
+  return `<div class="leave bad">❌ No alcanzas este bus <small>(${w.min} min andando, llega en ${bus})</small>${n2 !== null && n2 - w.min >= 0 ? `<br>El siguiente, en ${n2} min, sí` : ''}</div>`;
+}
+
+let mOpen = false;
+let repDays = '1,2,3,4,5'; let repTime = '08:00'; let repMin = 5;
+function cloudHtml(): string {
+  if (!pushSupported()) return /iPhone|iPad/.test(navigator.userAgent) ? '<div class="leave">☁️ Para avisos con la app cerrada, añádela a la pantalla de inicio (Compartir → Añadir a pantalla de inicio)</div>' : '';
+  if (!getPushId()) return '<div class="alrow"><span>☁️ Aunque cierre la app</span><div class="alopts"><button data-act="pushon">Activar</button></div></div>';
+  const o = (v: string, t: string) => `<option value="${v}" ${repDays === v ? 'selected' : ''}>${t}</option>`;
+  return `<div class="alrow rep"><span>🔁 Repetir</span><div class="alopts"><select id="rdays" aria-label="Días">${o('1,2,3,4,5', 'L–V')}${o('0,1,2,3,4,5,6', 'Todos')}${o('0,6', 'Fin de semana')}</select><input type="time" id="rtime" value="${repTime}" aria-label="Hora" /><select id="rmin" aria-label="Minutos de antelación">${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button data-act="repeat">Crear</button></div></div>`;
+}
+
 function updateMine() {
   const box = $('mine'); if (!sel?.mine) { box.hidden = true; return; }
+  const ae = document.activeElement as HTMLElement | null; if (ae && box.contains(ae) && /^(SELECT|INPUT)$/.test(ae.tagName)) return; // no pisar lo que el usuario está editando
   const p = byCode.get(sel.mine)!; const arr = arrivals.get(p.codigo) ?? [];
   const next = arr[0]; const a = approaching();
   let where = 'Ningún bus de camino ahora mismo';
@@ -273,16 +318,54 @@ function updateMine() {
   box.hidden = false;
   box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
-    <div class="alrow"><span>🔔 Avisarme a</span><div class="alopts">${[2, 5, 10].map((m) => `<button data-m="${m}" class="${isMyAlarm(m) ? 'on' : ''}">${m} min</button>`).join('')}</div></div>`;
+    ${leaveHtml(p, sel.route.stops.findIndex((x) => x.codigo === p.codigo), arr)}
+    <button class="moptsb" data-act="mopts" aria-expanded="${mOpen}">🔔 Alarmas y avisos <span>${mOpen ? '▴' : '▾'}</span></button><div class="mopts" ${mOpen ? '' : 'hidden'}>
+    <div class="alrow"><span>🔔 Avisarme a</span><div class="alopts">${[2, 5, 10].map((m) => `<button data-m="${m}" class="${isMyAlarm(m) ? 'on' : ''}">${m} min</button>`).join('')}</div></div>
+    <div class="alrow"><span>🛑 Me bajo aquí</span><div class="alopts"><button data-act="getoff" class="${isGetOff() ? 'on' : ''}">${isGetOff() ? 'Activado' : 'Avisar'}</button></div></div>
+    ${cloudHtml()}</div>`;
   $('mclear').onclick = clearMine;
   $('mshare').onclick = async () => {
     const url = `${location.origin}/?l=${encodeURIComponent(sel!.linea.codigo)}&d=${sel!.dir}&p=${p.codigo}`;
     const text = `Línea ${sel!.linea.codigo} en ${p.nombre}`;
     try { if (navigator.share) await navigator.share({ title: 'Bus Huelva', text, url }); else { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } } catch { /* cancelado */ }
   };
-  box.onclick = (e) => { const b = (e.target as HTMLElement).closest('button[data-m]') as HTMLElement | null; if (b) toggleAlarm(+b.dataset.m!); };
+  box.onclick = async (e) => {
+    const t = e.target as HTMLElement;
+    const b = t.closest('button[data-m]') as HTMLElement | null; if (b) { toggleAlarm(+b.dataset.m!); return; }
+    const a2 = (t.closest('button[data-act]') as HTMLElement | null)?.dataset.act;
+    if (a2 === 'geo') { geoOn = true; try { localStorage.setItem('geoOn', '1'); } catch { /* ignorar */ } await updateUserPos(); if (!userPos) toast('No pude obtener tu ubicación'); }
+    else if (a2 === 'mopts') { mOpen = !mOpen; updateMine(); }
+    else if (a2 === 'getoff') toggleGetOff();
+    else if (a2 === 'pushon') { try { await enablePush(); toast('Avisos en la nube activados ✓'); updateMine(); loadHomeAlarms(); } catch (err) { toast((err as Error).message); } }
+    else if (a2 === 'repeat' && sel?.mine) {
+      try {
+        const p0 = byCode.get(sel.mine)!;
+        await createAlarm({ linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, name: p0.nombre, min: repMin, kind: 'weekly', days: repDays, time: repTime });
+        toast(`Alarma creada: ${repDays === '1,2,3,4,5' ? 'L–V' : repDays === '0,6' ? 'fines de semana' : 'todos los días'} desde las ${repTime}`); loadHomeAlarms();
+      } catch (err) { toast((err as Error).message); }
+    }
+  };
 }
+$('mine').addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement | HTMLSelectElement;
+  if (t.id === 'rdays') repDays = t.value; else if (t.id === 'rtime') repTime = t.value || repTime; else if (t.id === 'rmin') repMin = +t.value;
+});
 setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
+
+// teclado y VoiceOver: Enter o espacio activan filas y el selector de altura
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target as HTMLElement; if (!t.matches?.('.srow,.frow,.grab,.chip')) return;
+  e.preventDefault(); t.click();
+});
+// tamaño de texto del sistema (Dynamic Type de iOS): escala el contenido de los paneles
+try {
+  if (CSS.supports('font', '-apple-system-body')) {
+    const probe = document.createElement('span'); probe.style.font = '-apple-system-body'; probe.textContent = 'x'; document.body.append(probe);
+    const px = parseFloat(getComputedStyle(probe).fontSize); probe.remove();
+    if (px > 0) document.documentElement.style.setProperty('--k', String(Math.min(1.7, Math.max(0.9, px / 17))));
+  }
+} catch { /* sin Dynamic Type */ }
 
 // hoja arrastrable con tres alturas (como Mapas de iOS)
 const DETENTS = [30, 52, 86]; let detent = 1;
@@ -299,25 +382,45 @@ function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1
     let best = 0; DETENTS.forEach((d, i) => { if (Math.abs(d - pct) < Math.abs(DETENTS[best] - pct)) best = i; });
     setDetent(best);
   };
+  el.querySelector('.grab')!.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0) setDetent((detent + 1) % DETENTS.length); }); // activación por teclado/VoiceOver
   for (const h of [el.querySelector('.grab')!, $('lhead')]) { h.addEventListener('pointerdown', down as EventListener); h.addEventListener('pointermove', move as EventListener); h.addEventListener('pointerup', up as EventListener); h.addEventListener('pointercancel', up as EventListener); }
 })();
 
 // ============ Alarma "avísame cuando mi bus esté a X min" ============
-type Alarm = { linea: string; dir: number; code: string; min: number };
+type Alarm = { kind?: 'bus' | 'getoff'; linea: string; dir: number; code: string; min: number; warned?: boolean; sid?: string };
 let alarm: Alarm | null = null;
 try { alarm = JSON.parse(localStorage.getItem('alarm') ?? 'null'); } catch { alarm = null; }
 let wake: { release(): Promise<void>; addEventListener(t: string, f: () => void): void } | null = null;
 let audio: AudioContext | null = null;
 let alarmTimer: number | undefined;
 
-const isMyAlarm = (m: number) => !!alarm && !!sel && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir && alarm.code === sel.mine && alarm.min === m;
+const dropServer = (a: Alarm | null) => { if (a?.sid) deleteAlarm(a.sid).catch(() => { /* ya no existe */ }); };
+const isMyAlarm = (m: number) => !!alarm && !!sel && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir && alarm.code === sel.mine && alarm.kind !== 'getoff' && alarm.min === m;
+const isGetOff = () => !!alarm && alarm.kind === 'getoff' && !!sel && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir && alarm.code === sel.mine;
+
+function toggleGetOff() {
+  if (!sel?.mine) return;
+  try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ }
+  if (isGetOff()) { dropServer(alarm); alarm = null; toast('Aviso de bajada cancelado'); }
+  else {
+    dropServer(alarm);
+    alarm = { kind: 'getoff', linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, min: 0 };
+    geoOn = true; try { localStorage.setItem('geoOn', '1'); } catch { /* ignorar */ }
+    toast('Te aviso al acercarte a tu parada. Mantén la app abierta y la ubicación activada');
+    try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* iOS sin PWA instalada */ }
+  }
+  saveAlarm(); alarmCheck();
+}
 
 function toggleAlarm(min: number) {
   if (!sel?.mine) return;
   try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ } // hay que desbloquearlo con un gesto del usuario
-  if (isMyAlarm(min)) { alarm = null; toast('Alarma cancelada'); }
+  if (isMyAlarm(min)) { dropServer(alarm); alarm = null; toast('Alarma cancelada'); }
   else {
+    dropServer(alarm);
     alarm = { linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, min };
+    const cur = alarm; // con avisos en la nube activados, también se registra en el servidor (suena con la app cerrada)
+    if (getPushId()) createAlarm({ linea: cur.linea, dir: cur.dir, code: cur.code, name: byCode.get(cur.code)?.nombre ?? '', min, kind: 'once' }).then((id) => { if (!id) return; if (alarm === cur) { cur.sid = id; saveAlarm(); } else deleteAlarm(id).catch(() => undefined); }).catch(() => toast('No pude registrar el aviso en la nube'));
     toast(`Te aviso cuando falten ${min} min. Mantén la app abierta`);
     try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* iOS sin PWA instalada */ }
   }
@@ -327,7 +430,7 @@ function toggleAlarm(min: number) {
 function saveAlarm() {
   try { if (alarm) localStorage.setItem('alarm', JSON.stringify(alarm)); else localStorage.removeItem('alarm'); } catch { /* ignorar */ }
   paintAlarm(); manageWake(); updateMine();
-  clearInterval(alarmTimer); if (alarm) alarmTimer = window.setInterval(alarmCheck, 15000);
+  clearInterval(alarmTimer); if (alarm) alarmTimer = window.setInterval(alarmCheck, alarm.kind === 'getoff' ? 8000 : 15000);
 }
 
 async function manageWake() { // pantalla encendida mientras haya alarma: iOS pausa las webs en segundo plano
@@ -342,15 +445,23 @@ function paintAlarm() {
   const el = $('alarm');
   if (!alarm) { el.hidden = true; return; }
   const p = byCode.get(alarm.code); el.hidden = false;
-  el.innerHTML = `<span class="al-t">🔔 L${esc(alarm.linea)} · ${esc(p?.nombre ?? '')} · ≤${alarm.min} min</span><button aria-label="Cancelar alarma">✕</button>`;
+  el.innerHTML = `<span class="al-t">${alarm.kind === 'getoff' ? `🛑 Bajas en ${esc(p?.nombre ?? '')} · L${esc(alarm.linea)}` : `🔔 L${esc(alarm.linea)} · ${esc(p?.nombre ?? '')} · ≤${alarm.min} min`}</span><button aria-label="Cancelar alarma">✕</button>`;
   (el.querySelector('.al-t') as HTMLElement).onclick = () => { if (alarm) selectLine(alarm.linea, { dir: alarm.dir, stop: alarm.code }); };
-  (el.querySelector('button') as HTMLElement).onclick = () => { alarm = null; saveAlarm(); toast('Alarma cancelada'); };
+  (el.querySelector('button') as HTMLElement).onclick = () => { dropServer(alarm); alarm = null; saveAlarm(); toast('Alarma cancelada'); };
 }
 
 async function alarmCheck() {
   const a = alarm; if (!a) return;
   const rec = lineaDe.get(a.linea)?.recorridos[a.dir]; if (!rec) return;
   const route = new Route(rec, byCode); const idx = route.stops.findIndex((x) => x.codigo === a.code); if (idx < 0) return;
+  if (a.kind === 'getoff') { // seguimiento por GPS dentro del bus
+    const pos = await getPos(); if (!pos || alarm !== a) return; userPos = pos;
+    const sn = route.snap(pos.lat, pos.lon); if (!sn || sn.d > 150) return; // no vas sobre la ruta
+    const remain = route.stopPos[idx] - sn.s; const left = idx - route.lastPassed(sn.s); const nm = route.stops[idx].nombre;
+    if (remain <= 150) { alarm = null; saveAlarm(); notifyUser(`🚏 ¡Bájate aquí! Parada ${nm}`); }
+    else if ((left <= 2 || remain <= 500) && !a.warned) { a.warned = true; saveAlarm(); notifyUser(`Prepárate: te bajas en ${nm} (a ${fmtDist(remain)})`); }
+    return;
+  }
   const [rb, ra] = await Promise.allSettled([fetch('/tr/buses').then((r) => r.json()), fetch(`/tr/${encodeURIComponent(a.linea)}`).then((r) => r.json())]);
   if (alarm !== a) return;
   const buses = rb.status === 'fulfilled' ? (rb.value.buses as Bus[] | null) : null;
@@ -377,9 +488,12 @@ function beep() {
 }
 
 function fireAlarm(a: Alarm, m: number) {
-  const p = byCode.get(a.code); alarm = null; saveAlarm();
-  const msg = m <= 0 ? `¡Tu bus L${a.linea} está llegando a ${p?.nombre}!` : `Tu bus L${a.linea} llega a ${p?.nombre} en ~${m} min`;
-  const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>🔔 ${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
+  const p = byCode.get(a.code); dropServer(a); alarm = null; saveAlarm();
+  notifyUser(m <= 0 ? `¡Tu bus L${a.linea} está llegando a ${p?.nombre}!` : `Tu bus L${a.linea} llega a ${p?.nombre} en ~${m} min`);
+}
+
+function notifyUser(msg: string) {
+  const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>${/^[^\x00-\x7F]/.test(msg) ? '' : '🔔 '}${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
   beep(); try { navigator.vibrate?.([300, 120, 300, 120, 300]); } catch { /* iOS no vibra */ }
   try {
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -429,10 +543,10 @@ $('arr').addEventListener('click', (e) => {
 });
 
 function paintFav() { $('fav').textContent = current && favs.includes(current.codigo) ? '★' : '☆'; }
-function closeStopSheet() { current = null; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
+function closeStopSheet() { current = null; $('pseg').hidden = true; $('ptime').hidden = true; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
 function openStop(p: Parada) {
   if (sel) { setMineFromMap(p); return; }
-  current = p; $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false;
+  current = p; $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
   $('sname').textContent = p.nombre; $('smeta').textContent = `Parada ${p.codigo} · Líneas ${p.lineas.join(', ')} · toca una línea para seguir su bus`;
   $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; showHome(); paintFav();
   map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16), { duration: 0.5 });
@@ -509,27 +623,80 @@ function origin(): Promise<Pt> {
   });
 }
 const walkMin = (m: number) => Math.max(1, Math.round(m / 75));
+const fmtM = (m: number) => (m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+const HM = (d: Date) => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+let plans: Plan[] = []; let planIdx = 0; let planFrom: Pt | null = null; let planDest: Dest | null = null;
+let tmode: 'now' | 'dep' | 'arr' = 'now'; let tval = ''; let planToken = 0;
+const profLabel = (id: string) => PROFILES.find((x) => x.id === id)?.label ?? id;
+
 async function planTo(d: Dest) {
   if (saving) { places[saving] = { lat: d.lat, lon: d.lon, name: d.name }; localStorage.setItem('places', JSON.stringify(places)); toast(`${saving === 'home' ? 'Casa' : 'Trabajo'} guardado`); saving = null; }
   mode = 'search'; $('go').classList.remove('active'); ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).placeholder = 'Buscar parada o línea'; $('results').hidden = true;
   if (sel) closeLine();
   toast('Calculando ruta…');
   const from = await origin();
-  const p = plan(graph, from, d);
+  planFrom = from; planDest = d; plans = planAll(graph, from, d); planIdx = 0;
   current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
-  if (!p) { $('smeta').textContent = 'Sin ruta'; $('arr').innerHTML = '<li>No encuentro una ruta en bus razonable (¿origen o destino fuera de la red?).</li>'; return; }
-  drawPlan(p, from, d); renderPlan(p, d);
+  $('pseg').hidden = true; $('ptime').hidden = true;
+  if (!plans.length) { $('smeta').textContent = 'Sin ruta'; $('arr').innerHTML = '<li>No encuentro una ruta en bus razonable (¿origen o destino fuera de la red?).</li>'; return; }
+  showPlan();
 }
+
+function showPlan() {
+  const p = plans[planIdx]; routeLayer.clearLayers(); planToken++;
+  renderPlanUI(); drawPlan(p, planFrom!, planDest!); renderPlan(p, planDest!); updateMeta();
+}
+
+function renderPlanUI() {
+  const seg = $('pseg'); seg.hidden = plans.length < 2;
+  seg.innerHTML = plans.map((p, i) => `<button data-i="${i}" class="${i === planIdx ? 'on' : ''}">${esc(profLabel(p.profile))}<small>${p.minutes} min</small></button>`).join('');
+  seg.onclick = (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) { planIdx = +b.dataset.i!; showPlan(); } };
+  $('ptime').hidden = false;
+}
+
+function updateMeta() {
+  const p = plans[planIdx]; if (!p) return;
+  const base = `${p.minutes} min · ${p.buses} bus${p.buses > 1 ? 'es' : ''}${p.buses > 1 ? ` · ${p.buses - 1} trasbordo${p.buses > 2 ? 's' : ''}` : ''} · ${fmtM(p.walkM)} a pie`;
+  let extra = `Llegas sobre las ${HM(new Date(Date.now() + p.minutes * 60000))}`;
+  const [h, m] = (tval || '').split(':').map(Number);
+  if (tmode !== 'now' && Number.isFinite(h)) {
+    const t = new Date(); t.setHours(h, m, 0, 0); if (t.getTime() < Date.now() - 6 * 3600e3) t.setDate(t.getDate() + 1);
+    extra = tmode === 'dep' ? `Sales a las ${HM(t)} · llegas sobre las ${HM(new Date(t.getTime() + p.minutes * 60000))}` : `Sal a las ${HM(new Date(t.getTime() - p.minutes * 60000))} para llegar a las ${HM(t)}`;
+  }
+  $('smeta').innerHTML = `${esc(base)}<br><b>${esc(extra)}</b>${tmode !== 'now' ? ' <i>(estimado por horario)</i>' : ' <i>· estimación</i>'}`;
+  document.querySelectorAll<HTMLElement>('#pseg button').forEach((b) => { const q = plans[+b.dataset.i!]; if (q) b.querySelector('small')!.textContent = `${q.minutes} min`; });
+}
+$('tmode').addEventListener('change', () => {
+  tmode = ($('tmode') as HTMLSelectElement).value as typeof tmode; const t = $('tval') as HTMLInputElement; t.hidden = tmode === 'now';
+  if (tmode !== 'now' && !t.value) { const n = new Date(Date.now() + 30 * 60000); t.value = `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`; tval = t.value; }
+  updateMeta();
+});
+$('tval').addEventListener('input', () => { tval = ($('tval') as HTMLInputElement).value; updateMeta(); });
+
+/** Tramo a pie por calles reales (con respaldo en línea recta). */
+function walkSeg(a: Pt, b: Pt, rowId: string, token: number, acc: { sec: number; n: number; total: number; p: Plan }) {
+  let ln = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color: '#8e8e93', weight: 4, dashArray: '2 8' }).addTo(routeLayer);
+  fetch(`/walk?a=${a.lat},${a.lon}&b=${b.lat},${b.lon}`).then((r) => r.json()).then((j: { code?: string; routes?: { distance: number; duration: number; geometry: { coordinates: [number, number][] } }[] }) => {
+    if (token !== planToken || !j.routes?.[0]) return;
+    const r = j.routes[0]; routeLayer.removeLayer(ln);
+    ln = L.polyline(r.geometry.coordinates.map(([lo, la]) => [la, lo] as [number, number]), { color: '#8e8e93', weight: 4, dashArray: '2 8' }).addTo(routeLayer);
+    const el = document.querySelector(`#${rowId} .wv`); if (el) el.textContent = `${Math.max(1, Math.round(r.duration / 60))} min (${fmtM(r.distance)})`;
+    acc.sec += r.duration; acc.n++;
+    if (acc.n === acc.total) { // ajustar el total con el tiempo a pie real
+      acc.p.minutes = Math.max(1, Math.round(acc.p.minutes + (acc.sec - acc.p.walkM / 1.25) / 60)); updateMeta();
+    }
+  }).catch(() => { /* se queda la línea recta */ });
+}
+
 function drawPlan(p: Plan, from: Pt, to: Pt) {
-  const gray = { color: '#555', weight: 4, dashArray: '2 8' };
-  const pts: [number, number][] = [];
-  const line = (a: Pt, b: Pt) => L.polyline([[a.lat, a.lon], [b.lat, b.lon]], gray).addTo(routeLayer);
-  line(from, p.legs[0].stops[0]);
+  const pts: [number, number][] = []; const token = planToken;
+  const segs: { a: Pt; b: Pt; id: string }[] = [];
+  if (p.walkStart.m >= 40) segs.push({ a: from, b: p.walkStart.to, id: 'w-start' });
   p.legs.forEach((l, i) => {
     const lin = lineaDe.get(l.linea); const rec = lin?.recorridos.find((r) => r.sentido === l.sentido);
     let ll = l.stops.map((s) => [s.lat, s.lon] as [number, number]);
-    if (rec) { // trazado real entre la parada de subida y la de bajada
+    if (rec) {
       const rt = new Route(rec, byCode); const a = rt.stops.findIndex((s) => s.codigo === l.stops[0].codigo); const b = rt.stops.findIndex((s) => s.codigo === l.stops.at(-1)!.codigo);
       if (a >= 0 && b > a) ll = rt.slice(rt.stopPos[a], rt.stopPos[b]);
     }
@@ -537,30 +704,31 @@ function drawPlan(p: Plan, from: Pt, to: Pt) {
     L.polyline(ll, { color: '#fff', weight: 10 }).addTo(routeLayer);
     L.polyline(ll, { color: l.color, weight: 6, opacity: 0.95 }).addTo(routeLayer);
     L.circleMarker(ll[0], { radius: 8, color: '#fff', weight: 3, fillColor: l.color, fillOpacity: 1 }).bindTooltip('Sube L' + l.linea).addTo(routeLayer);
-    let last = l.stops.at(-1)!;
-    for (const x of p.transfers.filter((t) => t.after === i)) { line(last, x.to); last = x.to; }
+    p.transfers.filter((t) => t.after === i).forEach((x, k) => segs.push({ a: x.from, b: x.to, id: `w-x${i}-${k}` }));
   });
-  line(p.walkEnd.from, to);
-  L.circleMarker([to.lat, to.lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#d32f2f', fillOpacity: 1 }).addTo(routeLayer);
-  map.fitBounds(L.latLngBounds([...pts, [from.lat, from.lon], [to.lat, to.lon]]).pad(0.25), { paddingBottomRight: [0, 260] });
+  if (dist(p.walkEnd.from, to) >= 40) segs.push({ a: p.walkEnd.from, b: to, id: 'w-end' });
+  const acc = { sec: 0, n: 0, total: segs.length, p };
+  segs.forEach((sg) => walkSeg(sg.a, sg.b, sg.id, token, acc));
+  L.circleMarker([to.lat, to.lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(routeLayer);
+  map.fitBounds(L.latLngBounds([...pts, [from.lat, from.lon], [to.lat, to.lon]]).pad(0.25), { paddingBottomRight: [0, window.innerHeight * 0.4] });
 }
+
 function renderPlan(p: Plan, to: Dest) {
-  const nBus = p.legs.filter((l) => !l.continua).length;
-  $('smeta').textContent = `~${p.minutes} min · ${nBus} bus${nBus > 1 ? 'es' : ''}${nBus > 1 ? ` · ${nBus - 1} trasbordo${nBus > 2 ? 's' : ''}` : ''} · estimación`;
-  const rows: string[] = p.walkStart.m < 40 ? [] : [`<div class="step"><span class="ic">🚶</span><div>Camina ${walkMin(p.walkStart.m)} min (${p.walkStart.m} m) hasta <b>${esc(p.walkStart.to.nombre)}</b></div></div>`];
+  const walk = (id: string, m: number, name: string) => `<div class="step" id="${id}"><span class="ic">🚶</span><div>Camina <span class="wv">${walkMin(m)} min (${fmtM(m)})</span> hasta <b>${esc(name)}</b></div></div>`;
+  const rows: string[] = p.walkStart.m < 40 ? [] : [walk('w-start', p.walkStart.m, p.walkStart.to.nombre)];
   p.legs.forEach((l, i) => {
     const a = l.stops[0], b = l.stops.at(-1)!;
     rows.push(`<div class="step"><span class="ic"><span class="badge" style="background:${l.color}">${esc(l.linea)}</span></span><div>${l.continua ? 'Sigues en el mismo bus. ' : ''}${l.continua ? '' : `Sube en <b>${esc(a.nombre)}</b><br>`}Baja en <b>${esc(b.nombre)}</b><small>${l.stops.length - 1} paradas · ~${l.minutes} min · ${esc(l.sentido.split('—')[0].trim())}</small>${i === 0 ? '<small id="rt0">Consultando próximo bus…</small>' : ''}<button class="follow" data-l="${esc(l.linea)}" data-s="${a.codigo}">Seguir este bus en el mapa</button></div></div>`);
-    for (const x of p.transfers.filter((t) => t.after === i)) rows.push(`<div class="step"><span class="ic">🚶</span><div>Camina ${walkMin(x.m)} min (${x.m} m) hasta <b>${esc(x.to.nombre)}</b></div></div>`);
+    p.transfers.filter((t) => t.after === i).forEach((x, k) => rows.push(walk(`w-x${i}-${k}`, x.m, x.to.nombre)));
   });
-  const rest = Math.round(dist(p.walkEnd.from, to)); if (rest >= 40) rows.push(`<div class="step"><span class="ic">🚶</span><div>Camina ${walkMin(rest)} min (${rest} m) hasta <b>${esc(to.name)}</b></div></div>`);
+  const rest = Math.round(dist(p.walkEnd.from, to)); if (rest >= 40) rows.push(walk('w-end', rest, to.name));
   $('arr').innerHTML = rows.join('');
   $('arr').querySelectorAll<HTMLElement>('.follow').forEach((b) => b.onclick = () => selectLine(b.dataset.l!, { stop: b.dataset.s }));
-  const first = p.legs[0];
+  const first = p.legs[0]; const tok = planToken;
   fetch(`/tr/parada/${first.stops[0].codigo}`).then((r) => r.json()).then(({ llegadas }: { llegadas: Llegada[] | null }) => {
-    const el = document.getElementById('rt0'); if (!el) return;
+    const el = document.getElementById('rt0'); if (!el || tok !== planToken) return;
     const n = llegadas?.find((l) => l.linea === first.linea && new Date(l.hora).getTime() > Date.now() - 20000);
-    el.innerHTML = n ? `<b class="rt">Próximo bus: ${mins(n.hora)} min</b> (${n.enVivo ? 'en directo' : 'horario'})` : 'Sin próximo bus previsto ahora mismo';
+    el.innerHTML = n ? `<b class="rt">Próximo bus: ${mins(n.hora) >= 90 ? 'a las ' + hhmm(n.hora) : mins(n.hora) + ' min'}</b> (${n.enVivo ? 'en directo' : 'horario'})` : 'Sin próximo bus previsto ahora mismo';
   }).catch(() => { const el = document.getElementById('rt0'); if (el) el.textContent = ''; });
 }
 
@@ -603,14 +771,15 @@ function renderHome() {
     return;
   }
   const place = (k: 'home' | 'work', ico: string, label: string) => `<button class="quick-b" data-act="${k}"><span class="qi">${ico}</span><b>${label}</b><small>${places[k] ? esc(places[k]!.name) : 'Toca para elegir'}</small></button>`;
-  const favRows = net.paradas.filter((p) => favs.includes(p.codigo)).slice(0, 6).map((p) => `<li class="frow" data-c="${p.codigo}"><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span><span class="fa" id="fa-${p.codigo}"></span></li>`).join('');
+  const favRows = net.paradas.filter((p) => favs.includes(p.codigo)).slice(0, 6).map((p) => `<li class="frow" data-c="${p.codigo}" role="button" tabindex="0" aria-label="Parada ${esc(p.nombre)}"><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span><span class="fa" id="fa-${p.codigo}"></span></li>`).join('');
   h.innerHTML = `<div class="grab"><i></i></div>
     <div class="head"><div><h2>Bus Huelva</h2><small>EMTUSA · tiempo real</small></div></div>
     ${avisos.slice(0, 3).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></a>`).join('')}
     <div class="quick">${place('home', '🏠', 'Casa')}${place('work', '💼', 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">🎫</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
+    <div id="hal"></div>
     <h3 class="sec">Mis paradas</h3>
     ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}`;
-  homeArrivals();
+  homeArrivals(); loadHomeAlarms();
 }
 
 async function homeArrivals() {
@@ -624,6 +793,15 @@ async function homeArrivals() {
   }
 }
 
+const dayLbl = (d: string | null) => d === '1,2,3,4,5' ? 'L–V' : d === '0,6' ? 'Fin de semana' : d === '0,1,2,3,4,5,6' ? 'Todos los días' : (d ?? '');
+async function loadHomeAlarms() {
+  const el = document.getElementById('hal'); if (!el || !getPushId()) return;
+  try {
+    const list: ServerAlarm[] = await listAlarms();
+    el.innerHTML = list.length ? `<h3 class="sec">Alarmas en la nube</h3><ul class="flist">${list.map((a) => `<li class="frow"><span class="nm">L${esc(a.linea)} · ${esc(a.name || a.code)}<small>${a.kind === 'weekly' ? `${dayLbl(a.days)} desde las ${a.time} · ≤${a.min} min` : `Una vez · ≤${a.min} min`}</small></span><button class="round" data-act="delal" data-id="${a.id}" aria-label="Borrar alarma">✕</button></li>`).join('')}</ul>` : '';
+  } catch { /* sin conexión con el servidor de avisos */ }
+}
+
 let pressT: number | undefined; let longPressed = false;
 $('home').addEventListener('pointerdown', (e) => {
   const b = (e.target as HTMLElement).closest('[data-act="home"],[data-act="work"]') as HTMLElement | null; if (!b) return;
@@ -634,6 +812,7 @@ $('home').addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
   const fr = el.closest('.frow') as HTMLElement | null; if (fr) { const p = byCode.get(fr.dataset.c!); if (p) openStop(p); return; }
   const b = el.closest('[data-act]') as HTMLElement | null; if (!b) return; const act = b.dataset.act!;
+  if (act === 'delal') { deleteAlarm(b.dataset.id!).then(loadHomeAlarms).catch(() => toast('No pude borrar la alarma')); return; }
   if (act === 'tarifas') { homeView = 'tarifas'; renderHome(); }
   else if (act === 'back') { homeView = 'home'; renderHome(); }
   else if (act === 'home' || act === 'work') {

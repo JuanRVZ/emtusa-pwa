@@ -1,0 +1,25 @@
+name: Actualizar red de líneas
+on:
+  schedule: [{ cron: '23 5 * * 1' }]   # cada lunes
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node scripts/build-data.mjs
+      - name: Abrir PR si la red cambió
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          if git diff --quiet -- public/data/network.json; then echo "Sin cambios."; exit 0; fi
+          B="data/red-$(date +%Y%m%d)"
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$B"; git add public/data/network.json
+          git commit -m "Actualiza la red de líneas y paradas"
+          git push origin "$B"
+          gh pr create --base main --head "$B" --title "Actualizar red de líneas y paradas" --body "Cambios detectados en los recorridos o paradas de EMTUSA. Revisa el diff antes de fusionar y de desplegar."

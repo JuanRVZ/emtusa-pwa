@@ -1,6 +1,6 @@
 // Construye public/data/network.json: líneas, recorridos y paradas con coordenadas.
 // Fuente: API pública de la web oficial (CMS) + payload embebido en /lineas/{n}.
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 const BASE = 'https://www.emtusahuelva.com';
 const UA = { 'User-Agent': 'emtusa-pwa-personal/0.1 (proyecto personal sin ánimo de lucro)' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,5 +60,8 @@ const out = {
   paradas: [...stops.values()].map((s) => ({ ...s, lineas: [...s.lineas] })),
 };
 const sinCoord = out.paradas.filter((s) => s.lat == null).length;
-writeFileSync('public/data/network.json', JSON.stringify(out));
-console.log(`\n${out.lineas.length} líneas, ${out.paradas.length} paradas (${sinCoord} sin coordenadas)`);
+// Solo se reescribe si la red cambió de verdad (ignorando la fecha de generación): así los PR automáticos no se llenan de ruido
+let igual = false;
+try { const prev = JSON.parse(readFileSync('public/data/network.json', 'utf8')); igual = JSON.stringify({ ...prev, generado: 0 }) === JSON.stringify({ ...out, generado: 0 }); } catch { /* primera vez */ }
+if (igual) console.log('\nSin cambios respecto a la red guardada.'); else writeFileSync('public/data/network.json', JSON.stringify(out));
+console.log(`${out.lineas.length} líneas, ${out.paradas.length} paradas (${sinCoord} sin coordenadas)`);

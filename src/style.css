@@ -183,3 +183,39 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 .mini b { font-weight:800; } .mini.live { box-shadow:0 0 0 2px color-mix(in srgb, var(--green) 70%, transparent); }
 .fares li { padding:12px 14px; } .fares .star { color:var(--orange); } .fares .eta { margin-right:0; }
 .macts { display:flex; gap:6px; } #mshare { width:26px; height:26px; padding:0; border:0; border-radius:50%; background:rgba(255,255,255,.25); color:#fff; font-size:14px; font-weight:700; }
+
+/* alternativas de ruta y hora */
+#pseg { display:flex; gap:2px; padding:2px; margin:12px 0 0; border-radius:10px; background:var(--fill); }
+#pseg[hidden], #ptime[hidden] { display:none; }
+#pseg button { flex:1; min-width:0; padding:6px 4px; border:0; border-radius:8px; background:none; color:var(--fg); font-size:12px; font-weight:600; line-height:1.15; }
+#pseg button small { display:block; font-weight:400; color:var(--mut); font-size:11px; }
+#pseg button.on { background:var(--solid); box-shadow:0 3px 8px rgba(0,0,0,.12); }
+@media (prefers-color-scheme: dark) { #pseg button.on { background:#636366; } }
+#ptime { display:flex; gap:8px; margin-top:10px; }
+#ptime select, #ptime input { font:600 14px var(--font); padding:7px 10px; border:0; border-radius:10px; background:var(--fill); color:var(--fg); }
+#smeta i { font-style:normal; opacity:.75; }
+
+/* ¿llego a tiempo? */
+.leave { margin-top:8px; padding:7px 10px; border-radius:12px; background:rgba(255,255,255,.18); font-size:13.5px; font-weight:600; line-height:1.3; }
+.leave small { font-weight:500; opacity:.9; }
+.leave.ok { background:rgba(52,199,89,.38); } .leave.warn { background:rgba(255,159,10,.45); } .leave.bad { background:rgba(255,59,48,.45); }
+.leave button { all:unset; display:block; width:100%; cursor:pointer; font-weight:700; }
+
+/* accesibilidad */
+:focus-visible { outline:3px solid var(--blue); outline-offset:2px; border-radius:8px; }
+button:focus:not(:focus-visible), .srow:focus:not(:focus-visible) { outline:none; }
+#slist, #mine, #lhead, #seg, #arr, #pseg, #ptime, .head, .quick, .flist, .aviso, .sec, .hint { zoom:var(--k, 1); }
+@media (prefers-contrast: more) { :root { --sep:rgba(0,0,0,.5); --mut:rgba(0,0,0,.75); } .chip, .badge { outline:2px solid #fff; } }
+@media (prefers-color-scheme: dark) and (prefers-contrast: more) { :root { --sep:rgba(255,255,255,.6); --mut:rgba(255,255,255,.85); } }
+
+/* avisos en la nube */
+.alrow.rep { flex-wrap:wrap; } .alrow.rep .alopts { flex-wrap:wrap; justify-content:flex-end; }
+.alopts select, .alopts input[type=time] { border:0; border-radius:12px; padding:5px 8px; background:rgba(255,255,255,.22); color:#fff; font:600 13px var(--font); max-width:110px; }
+.alopts select option { color:#000; }
+#hal .round { margin-left:6px; }
+
+.moptsb { all:unset; box-sizing:border-box; display:flex; justify-content:space-between; width:100%; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,.22); font-size:14px; font-weight:600; cursor:pointer; }
+.moptsb:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+.mopts[hidden] { display:none; }
+
+.round[hidden] { display:none; }

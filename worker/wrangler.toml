@@ -1,0 +1,19 @@
+name = "bus-huelva-push"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+workers_dev = true
+preview_urls = false
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+VAPID_PUBLIC = "BKkxnLvVIeFqcM5H_2lPF34-ohZAGMMxcs30VE5X45F1a07_r_L73AK4vncgsOk7rLD7QXE-WM19AvpZzrXoDAo"
+VAPID_SUBJECT = "https://bus-huelva.pages.dev"
+# VAPID_PRIVATE es un secreto: wrangler secret put VAPID_PRIVATE
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bus-huelva"
+database_id = "6623effa-cb5b-41f6-95ef-57c0acceedb7"
+

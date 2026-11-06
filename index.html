@@ -25,29 +25,31 @@
     <button id="loc" class="fab" aria-label="Paradas cercanas"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M20.5 3.5 3.8 10.4c-.8.3-.7 1.5.1 1.7l6.5 1.8 1.8 6.5c.2.8 1.4.9 1.7.1L20.5 3.5Z"/></svg></button>
   </header>
   <nav id="lines" aria-label="Líneas"></nav>
-  <div id="alarm" hidden></div>
-  <ul id="results" hidden></ul>
+  <div id="alarm" role="status" hidden></div>
+  <ul id="results" role="listbox" aria-label="Resultados" hidden></ul>
 
-  <section id="home" class="sheet auto" hidden></section>
+  <section id="home" class="sheet auto" role="region" aria-label="Inicio" hidden></section>
 
-  <section id="lsheet" class="sheet" hidden>
-    <div class="grab"><i></i></div>
+  <section id="lsheet" class="sheet" role="region" aria-label="Detalle de la línea" hidden>
+    <div class="grab" role="button" tabindex="0" aria-label="Cambiar la altura del panel"><i></i></div>
     <div id="lhead"></div>
     <div id="seg"></div>
     <div id="mine" hidden></div>
     <ul id="slist"></ul>
   </section>
 
-  <section id="sheet" class="sheet auto" hidden>
+  <section id="sheet" class="sheet auto" role="region" aria-label="Detalle de la parada" hidden>
     <div class="grab"><i></i></div>
     <div class="head">
       <div><h2 id="sname"></h2><small id="smeta"></small></div>
       <div class="acts"><button id="fav" class="round" aria-label="Favorita">☆</button><button id="close" class="round" aria-label="Cerrar">✕</button></div>
     </div>
+    <div id="pseg" hidden></div>
+    <div id="ptime" hidden><select id="tmode" aria-label="Cuándo"><option value="now">Salir ahora</option><option value="dep">Salir a las</option><option value="arr">Llegar a las</option></select><input type="time" id="tval" aria-label="Hora" hidden /></div>
     <ul id="arr"></ul>
   </section>
-  <div id="ring" hidden></div>
-  <div id="status"></div>
+  <div id="ring" role="alert" hidden></div>
+  <div id="status" role="status" aria-live="polite"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

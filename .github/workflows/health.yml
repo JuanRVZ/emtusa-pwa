@@ -1,0 +1,31 @@
+name: Comprobar API de EMTUSA
+on:
+  schedule: [{ cron: '17 6 * * *' }]   # cada día
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Comprobar endpoints
+        id: check
+        run: |
+          set +e
+          node scripts/health-check.mjs | tee health.txt
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Avisar con una issue si algo cambió
+        if: steps.check.outputs.code != '0'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          if [ -z "$(gh issue list --label api-emtusa --state open --json number --jq '.[0].number')" ]; then
+            gh label create api-emtusa --color d93f0b --description "La API de EMTUSA cambió" 2>/dev/null || true
+            gh issue create --label api-emtusa --title "La API de EMTUSA parece haber cambiado" --body "$(printf 'La comprobación diaria ha fallado:\n\n```\n%s\n```\n\nRevisa `scripts/health-check.mjs` y el cliente (`src/main.ts`, `scripts/build-data.mjs`).' "$(cat health.txt)")"
+          fi
+      - name: Marcar el workflow como fallido
+        if: steps.check.outputs.code != '0'
+        run: exit 1

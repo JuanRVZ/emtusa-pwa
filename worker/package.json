@@ -1,0 +1,1 @@
+{ "name": "bus-huelva-push", "private": true, "version": "0.1.0", "type": "module", "dependencies": { "@block65/webcrypto-web-push": "2.0.0" } }
