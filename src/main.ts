@@ -48,6 +48,16 @@ fetch('/data/huelva.pmtiles').then((r) => (r.ok ? r.arrayBuffer() : Promise.reje
   .then((buf) => { pm = new PMTiles(new MemSource(buf)); addBase(); })
   .catch(() => addBase()); // sin el archivo propio: mapa raster de OpenStreetMap
 map.on('zoomend', () => map.getContainer().classList.toggle('z-low', map.getZoom() < 15)); map.getContainer().classList.toggle('z-low', map.getZoom() < 15);
+// Tamaño del mapa: en iOS la ventana de una PWA cambia justo después de arrancar y a veces no llega el evento "resize";
+// Leaflet solo mide al crearse, así que se vigila el propio contenedor y se revisa tras el arranque y al volver a la app.
+const refit = () => map.invalidateSize({ animate: false });
+new ResizeObserver(refit).observe($('map'));
+window.addEventListener('resize', refit); window.addEventListener('orientationchange', () => setTimeout(refit, 300));
+window.visualViewport?.addEventListener('resize', refit);
+window.addEventListener('pageshow', () => setTimeout(refit, 100));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(refit, 100); });
+[150, 600, 1500, 3500].forEach((t) => setTimeout(refit, t));
+
 const stopLayer = L.layerGroup().addTo(map);
 const busLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
@@ -913,3 +923,30 @@ window.addEventListener('online', () => { toast('Conexión recuperada'); loadBus
   else if (pc && byCode.has(pc)) openStop(byCode.get(pc)!);
 }
 if ('serviceWorker' in navigator && import.meta.env.PROD) navigator.serviceWorker.register('/sw.js');
+
+// ============ Diagnóstico de pantalla (5 toques seguidos en el título "Bus Huelva" del inicio, o ?diag=1) ============
+let diagEl: HTMLPreElement | null = null; let diagTimer: number | undefined;
+function toggleDiag(force?: boolean) {
+  const on = force ?? !diagEl;
+  if (!on) { diagEl?.remove(); diagEl = null; clearInterval(diagTimer); return; }
+  if (diagEl) return;
+  const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'; document.body.append(probe);
+  const el = document.createElement('pre'); diagEl = el;
+  el.style.cssText = 'position:fixed;z-index:9999;left:6px;right:6px;top:calc(env(safe-area-inset-top) + 60px);margin:0;padding:8px;border-radius:10px;background:rgba(0,0,0,.82);color:#7CFC8A;font:11px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none';
+  const upd = () => {
+    const cs = getComputedStyle(probe); const m = $('map').getBoundingClientRect(); const lf = map.getSize(); const vv = window.visualViewport;
+    const sheet = ['lsheet', 'sheet', 'home', 'alsheet'].map((id) => document.getElementById(id)).find((e) => e && !e.hidden)?.getBoundingClientRect();
+    el.textContent = [
+      `ventana        ${innerWidth} x ${innerHeight}`, `pantalla       ${screen.width} x ${screen.height}  (dpr ${devicePixelRatio})`,
+      `visualViewport ${Math.round(vv?.width ?? 0)} x ${Math.round(vv?.height ?? 0)}  (offsetTop ${Math.round(vv?.offsetTop ?? 0)})`,
+      `margen seguro  arriba ${cs.paddingTop} · abajo ${cs.paddingBottom}`,
+      `mapa (CSS)     ${Math.round(m.width)} x ${Math.round(m.height)}  arriba ${Math.round(m.top)}  abajo ${Math.round(innerHeight - m.bottom)}`,
+      `mapa (Leaflet) ${lf.x} x ${lf.y}${lf.y !== Math.round(m.height) || lf.x !== Math.round(m.width) ? '  <-- NO COINCIDE' : '  ok'}`,
+      sheet ? `hoja abierta   arriba ${Math.round(sheet.top)}  abajo ${Math.round(innerHeight - sheet.bottom)}` : 'hoja abierta   (ninguna)',
+      `instalada      standalone=${matchMedia('(display-mode: standalone)').matches}  ios=${String((navigator as unknown as { standalone?: boolean }).standalone)}`,
+    ].join('\n');
+  };
+  document.body.append(el); upd(); diagTimer = window.setInterval(upd, 800);
+}
+if (new URLSearchParams(location.search).get('diag')) toggleDiag(true);
+{ let taps = 0; let last = 0; document.addEventListener('click', (e) => { const h = (e.target as HTMLElement).closest('#home .head h2'); if (!h) return; const now = Date.now(); taps = now - last < 700 ? taps + 1 : 1; last = now; if (taps >= 5) { taps = 0; toggleDiag(); } }); }
