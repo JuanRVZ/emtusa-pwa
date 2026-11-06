@@ -71,7 +71,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   const route = new Route(linea.recorridos[dir], byCode);
   const mine = opts.stop ?? (mineStore[code]?.dir === dir ? mineStore[code].code : null);
   sel = { linea, dir, route, mine: mine && route.stops.some((s) => s.codigo === mine) ? mine : null };
-  stopLayer.clearLayers(); busLayer.clearLayers();
+  stopLayer.clearLayers(); busLayer.clearLayers(); showHome();
   document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.l === code)); chips.classList.add('has-sel');
   (document.querySelector(`.chip[data-l="${CSS.escape(code)}"]`) as HTMLElement | null)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   drawLine(true);
@@ -90,7 +90,7 @@ function closeLine() {
   sel = null; clearLine(); clearInterval(refreshTimer);
   $('lsheet').hidden = true;
   document.querySelectorAll('.chip').forEach((c) => c.classList.remove('on')); chips.classList.remove('has-sel');
-  drawStops(); loadBuses();
+  drawStops(); loadBuses(); showHome();
 }
 
 function drawLine(fit: boolean) {
@@ -271,10 +271,15 @@ function updateMine() {
   const sub = useEst ? 'estimado por la posición del bus' + (next ? ` · siguiente oficial ${hhmm(next.hora)}` : '')
     : next ? `${hhmm(next.hora)} · ${next.enVivo ? '<b class="rt">en directo</b>' : 'según horario'}${arr[1] ? ` · luego ${etaTxt(arr[1].hora)}` : ''}` : 'Sin llegadas previstas';
   box.hidden = false;
-  box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><button id="mclear" aria-label="Quitar">✕</button></div>
+  box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
     <div class="alrow"><span>🔔 Avisarme a</span><div class="alopts">${[2, 5, 10].map((m) => `<button data-m="${m}" class="${isMyAlarm(m) ? 'on' : ''}">${m} min</button>`).join('')}</div></div>`;
   $('mclear').onclick = clearMine;
+  $('mshare').onclick = async () => {
+    const url = `${location.origin}/?l=${encodeURIComponent(sel!.linea.codigo)}&d=${sel!.dir}&p=${p.codigo}`;
+    const text = `Línea ${sel!.linea.codigo} en ${p.nombre}`;
+    try { if (navigator.share) await navigator.share({ title: 'Bus Huelva', text, url }); else { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } } catch { /* cancelado */ }
+  };
   box.onclick = (e) => { const b = (e.target as HTMLElement).closest('button[data-m]') as HTMLElement | null; if (b) toggleAlarm(+b.dataset.m!); };
 }
 setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
@@ -424,12 +429,12 @@ $('arr').addEventListener('click', (e) => {
 });
 
 function paintFav() { $('fav').textContent = current && favs.includes(current.codigo) ? '★' : '☆'; }
-function closeStopSheet() { current = null; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; }
+function closeStopSheet() { current = null; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
 function openStop(p: Parada) {
   if (sel) { setMineFromMap(p); return; }
   current = p; $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false;
   $('sname').textContent = p.nombre; $('smeta').textContent = `Parada ${p.codigo} · Líneas ${p.lineas.join(', ')} · toca una línea para seguir su bus`;
-  $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; paintFav();
+  $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; showHome(); paintFav();
   map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16), { duration: 0.5 });
   loadArrivals();
 }
@@ -491,7 +496,7 @@ function destSearch(raw: string) {
   }, 600);
 }
 $('go').onclick = () => {
-  mode = mode === 'dest' ? 'search' : 'dest';
+  saving = null; mode = mode === 'dest' ? 'search' : 'dest';
   const q = $('q') as HTMLInputElement; q.value = ''; q.placeholder = mode === 'dest' ? '¿A dónde vas? Parada o dirección' : 'Buscar parada o línea';
   $('go').classList.toggle('active', mode === 'dest'); showResults([]); if (mode === 'dest') q.focus();
 };
@@ -505,12 +510,13 @@ function origin(): Promise<Pt> {
 }
 const walkMin = (m: number) => Math.max(1, Math.round(m / 75));
 async function planTo(d: Dest) {
+  if (saving) { places[saving] = { lat: d.lat, lon: d.lon, name: d.name }; localStorage.setItem('places', JSON.stringify(places)); toast(`${saving === 'home' ? 'Casa' : 'Trabajo'} guardado`); saving = null; }
   mode = 'search'; $('go').classList.remove('active'); ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).placeholder = 'Buscar parada o línea'; $('results').hidden = true;
   if (sel) closeLine();
   toast('Calculando ruta…');
   const from = await origin();
   const p = plan(graph, from, d);
-  current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false;
+  current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
   if (!p) { $('smeta').textContent = 'Sin ruta'; $('arr').innerHTML = '<li>No encuentro una ruta en bus razonable (¿origen o destino fuera de la red?).</li>'; return; }
   drawPlan(p, from, d); renderPlan(p, d);
@@ -558,8 +564,96 @@ function renderPlan(p: Plan, to: Dest) {
   }).catch(() => { const el = document.getElementById('rt0'); if (el) el.textContent = ''; });
 }
 
+// ============ Pantalla de inicio: avisos, favoritas, casa/trabajo, tarifas ============
+type Aviso = { titulo: string; slug: string; severidad: string; vigenciaDesde: string; vigenciaHasta: string };
+type Tarifa = { titulo: string; importe: number; unidad: string; destacada?: boolean };
+type Place = { lat: number; lon: number; name: string };
+let avisos: Aviso[] = []; let tarifas: Tarifa[] = [];
+let homeView: 'home' | 'tarifas' = 'home';
+let places: { home?: Place; work?: Place } = {};
+try { places = JSON.parse(localStorage.getItem('places') ?? '{}'); } catch { places = {}; }
+let saving: 'home' | 'work' | null = null;
+let homeTimer: number | undefined;
+
+async function loadInfo() {
+  try {
+    const [a, t] = await Promise.all([fetch('/info/avisos').then((r) => r.json()), fetch('/info/tarifas').then((r) => r.json())]);
+    const now = Date.now();
+    avisos = ((a.docs ?? []) as Aviso[]).filter((x) => { const d = Date.parse(x.vigenciaDesde), h = Date.parse(x.vigenciaHasta); return h >= d && h >= now && d <= now + 7 * 864e5; });
+    tarifas = ((t.docs ?? []) as Tarifa[]).sort((x, y) => Number(!!y.destacada) - Number(!!x.destacada));
+    if (!$('home').hidden) renderHome();
+  } catch { /* sin información adicional */ }
+}
+const eur = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
+const unidad = (u: string) => ({ por_viaje: 'por viaje', mensual: 'al mes', por_dia: 'por día' })[u] ?? u;
+const sevClass = (v: string) => (/crit|grave|urgent|emerg/i.test(v) ? 'crit' : /alert|import|warn|aten/i.test(v) ? 'warn' : 'info');
+const fdate = (iso: string) => new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+
+function showHome() {
+  const h = $('home'); const should = !sel && $('sheet').hidden;
+  h.hidden = !should; clearInterval(homeTimer);
+  if (should) { renderHome(); homeTimer = window.setInterval(() => { if (!document.hidden) homeArrivals(); }, 30000); }
+}
+
+function renderHome() {
+  const h = $('home');
+  if (homeView === 'tarifas') {
+    h.innerHTML = `<div class="grab"><i></i></div><div class="head"><div><h2>Tarifas</h2><small>Precios oficiales de EMTUSA</small></div><div class="acts"><button class="round" data-act="back" aria-label="Volver">‹</button></div></div>
+      <ul id="arr" class="fares">${tarifas.length ? tarifas.map((t) => `<li><span class="nm">${esc(t.titulo)}${t.destacada ? ' <small class="star">★ destacada</small>' : ''}</span><span class="eta">${t.importe === 0 ? 'Gratis' : eur(t.importe)}<small>${t.importe === 0 ? unidad(t.unidad) : unidad(t.unidad)}</small></span></li>`).join('') : '<li>Sin datos de tarifas ahora mismo.</li>'}</ul>`;
+    return;
+  }
+  const place = (k: 'home' | 'work', ico: string, label: string) => `<button class="quick-b" data-act="${k}"><span class="qi">${ico}</span><b>${label}</b><small>${places[k] ? esc(places[k]!.name) : 'Toca para elegir'}</small></button>`;
+  const favRows = net.paradas.filter((p) => favs.includes(p.codigo)).slice(0, 6).map((p) => `<li class="frow" data-c="${p.codigo}"><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span><span class="fa" id="fa-${p.codigo}"></span></li>`).join('');
+  h.innerHTML = `<div class="grab"><i></i></div>
+    <div class="head"><div><h2>Bus Huelva</h2><small>EMTUSA · tiempo real</small></div></div>
+    ${avisos.slice(0, 3).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></a>`).join('')}
+    <div class="quick">${place('home', '🏠', 'Casa')}${place('work', '💼', 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">🎫</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
+    <h3 class="sec">Mis paradas</h3>
+    ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}`;
+  homeArrivals();
+}
+
+async function homeArrivals() {
+  for (const p of net.paradas.filter((x) => favs.includes(x.codigo)).slice(0, 6)) {
+    try {
+      const { llegadas } = (await (await fetch(`/tr/parada/${p.codigo}`)).json()) as { llegadas: Llegada[] | null };
+      const el = document.getElementById('fa-' + p.codigo); if (!el) continue;
+      const ls = (llegadas ?? []).filter((l) => new Date(l.hora).getTime() > Date.now() - 20000).slice(0, 3);
+      el.innerHTML = ls.length ? ls.map((l) => `<span class="mini ${l.enVivo ? 'live' : ''}" style="--c:${l.colorLinea}"><b>${esc(l.linea)}</b> ${etaTxt(l.hora).replace(' min', "'")}</span>`).join('') : '<span class="none">Sin buses</span>';
+    } catch { /* sin conexión */ }
+  }
+}
+
+let pressT: number | undefined; let longPressed = false;
+$('home').addEventListener('pointerdown', (e) => {
+  const b = (e.target as HTMLElement).closest('[data-act="home"],[data-act="work"]') as HTMLElement | null; if (!b) return;
+  longPressed = false; pressT = window.setTimeout(() => { longPressed = true; const k = b.dataset.act as 'home' | 'work'; if (places[k]) { delete places[k]; localStorage.setItem('places', JSON.stringify(places)); toast(`${k === 'home' ? 'Casa' : 'Trabajo'} borrado`); renderHome(); } }, 650);
+});
+for (const t of ['pointerup', 'pointercancel', 'pointerleave']) $('home').addEventListener(t, () => clearTimeout(pressT));
+$('home').addEventListener('click', (e) => {
+  const el = e.target as HTMLElement;
+  const fr = el.closest('.frow') as HTMLElement | null; if (fr) { const p = byCode.get(fr.dataset.c!); if (p) openStop(p); return; }
+  const b = el.closest('[data-act]') as HTMLElement | null; if (!b) return; const act = b.dataset.act!;
+  if (act === 'tarifas') { homeView = 'tarifas'; renderHome(); }
+  else if (act === 'back') { homeView = 'home'; renderHome(); }
+  else if (act === 'home' || act === 'work') {
+    if (longPressed) { longPressed = false; return; }
+    const pl = places[act]; if (pl) { planTo(pl); return; }
+    saving = act; mode = 'dest'; $('go').classList.add('active');
+    const q = $('q') as HTMLInputElement; q.value = ''; q.placeholder = act === 'home' ? 'Dirección de tu casa' : 'Dirección de tu trabajo'; q.focus();
+  }
+});
+
 // ============ Arranque ============
 drawStops(); loadBuses();
 setInterval(() => { if (!document.hidden) { loadBuses(); loadArrivals(); } }, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); if (alarm) { manageWake(); alarmCheck(); } } });
+loadInfo(); showHome();
+window.addEventListener('offline', () => toast('Sin conexión: no hay datos en directo'));
+window.addEventListener('online', () => { toast('Conexión recuperada'); loadBuses(); loadInfo(); if (sel) refreshLive(); });
+{ // enlaces compartidos: /?l=8&d=0&p=1034  ó  /?p=1034
+  const qs = new URLSearchParams(location.search); const l = qs.get('l'), pc = qs.get('p'), d = qs.get('d');
+  if (l && lineaDe.has(l)) selectLine(l, { dir: d !== null ? +d : undefined, stop: pc ?? undefined });
+  else if (pc && byCode.has(pc)) openStop(byCode.get(pc)!);
+}
 if ('serviceWorker' in navigator && import.meta.env.PROD) navigator.serviceWorker.register('/sw.js');
