@@ -18,7 +18,8 @@ const graph = buildGraph(net as never);
 const REFRESH = 20000;
 
 const map = L.map('map', { zoomControl: false }).setView([37.2614, -6.9447], 14);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+map.on('zoomend', () => map.getContainer().classList.toggle('z-low', map.getZoom() < 15)); map.getContainer().classList.toggle('z-low', map.getZoom() < 15);
 const stopLayer = L.layerGroup().addTo(map);
 const busLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
@@ -71,10 +72,10 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   const mine = opts.stop ?? (mineStore[code]?.dir === dir ? mineStore[code].code : null);
   sel = { linea, dir, route, mine: mine && route.stops.some((s) => s.codigo === mine) ? mine : null };
   stopLayer.clearLayers(); busLayer.clearLayers();
-  document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.l === code));
+  document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.l === code)); chips.classList.add('has-sel');
   (document.querySelector(`.chip[data-l="${CSS.escape(code)}"]`) as HTMLElement | null)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   drawLine(true);
-  $('lsheet').hidden = false; $('lsheet').classList.remove('full');
+  $('lsheet').hidden = false; setDetent(1);
   arrivals = new Map(); tracked = [];
   renderPanel(); refreshLive();
   clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, REFRESH);
@@ -88,7 +89,7 @@ function clearLine() {
 function closeLine() {
   sel = null; clearLine(); clearInterval(refreshTimer);
   $('lsheet').hidden = true;
-  document.querySelectorAll('.chip').forEach((c) => c.classList.remove('on'));
+  document.querySelectorAll('.chip').forEach((c) => c.classList.remove('on')); chips.classList.remove('has-sel');
   drawStops(); loadBuses();
 }
 
@@ -127,8 +128,13 @@ function setMine(code: string) {
   sel.mine = code;
   mineStore[sel.linea.codigo] = { dir: sel.dir, code }; localStorage.setItem('mine', JSON.stringify(mineStore));
   updateMineMarker(); renderPanel(); updateMine();
-  const p = byCode.get(code)!; map.panTo([p.lat, p.lon], { animate: true });
+  const p = byCode.get(code)!; focusAbove([p.lat, p.lon]);
   scrollToMine();
+}
+
+function focusAbove(ll: [number, number]) {
+  const h = $('lsheet').getBoundingClientRect().height; const z = Math.max(map.getZoom(), 15);
+  map.setView(map.unproject(map.project(ll, z).add([0, h / 2]), z), z, { animate: true });
 }
 
 function clearMine() {
@@ -227,19 +233,19 @@ function renderPanel() {
   if (!sel) return;
   const { linea, route, dir } = sel;
   const head = $('lhead');
-  head.innerHTML = `<span class="badge big" style="background:${linea.color}">${esc(linea.codigo)}</span><div class="lt"><b>${esc(linea.nombre)}</b><small id="lstat"></small></div><button id="lclose" aria-label="Cerrar">✕</button>`;
+  head.innerHTML = `<span class="badge big" style="background:${linea.color}">${esc(linea.codigo)}</span><div class="lt"><b>${esc(linea.nombre)}</b><small id="lstat"></small></div><button id="lclose" class="round" aria-label="Cerrar">✕</button>`;
   $('lclose').onclick = closeLine;
   const seg = $('seg');
   seg.innerHTML = linea.recorridos.map((r, i) => `<button class="${i === dir ? 'on' : ''}" data-d="${i}">→ ${esc(destino(r))}</button>`).join('');
   seg.onclick = (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) setDir(+b.dataset.d!); };
-  $('lstat').textContent = !liveOk ? 'Sin datos en directo' : `${tracked.length} bus${tracked.length === 1 ? '' : 'es'} en este sentido ahora`;
+  const st = $('lstat'); st.textContent = !liveOk ? 'Sin datos en directo' : tracked.length ? `${tracked.length} bus${tracked.length === 1 ? '' : 'es'} en circulación en este sentido` : 'Ningún bus en este sentido ahora'; st.classList.toggle('on', liveOk && tracked.length > 0);
 
   const list = $('slist'); const keep = list.scrollTop;
   const rows: string[] = [];
   route.stops.forEach((p, i) => {
     const e = etaFor(i);
     const et = e ? `<span class="et ${e.src}">${e.txt}</span>` : '<span class="et none">—</span>';
-    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}"><i class="dot" style="--c:${linea.color}"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
+    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}" style="--c:${linea.color}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
       rows.push(`<li class="brow" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
   });
@@ -271,7 +277,23 @@ function updateMine() {
 }
 setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
 
-$('lsheet').addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('.grab')) $('lsheet').classList.toggle('full'); });
+// hoja arrastrable con tres alturas (como Mapas de iOS)
+const DETENTS = [30, 52, 86]; let detent = 1;
+function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1, i)); const el = $('lsheet'); el.style.height = ''; el.style.setProperty('--h', String(DETENTS[detent])); }
+(() => {
+  const el = $('lsheet'); let y0 = 0, h0 = 0, t0 = 0, moved = false, on = false;
+  const down = (e: PointerEvent) => { if ((e.target as HTMLElement).closest('button')) return; on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; h0 = el.getBoundingClientRect().height; el.classList.add('dragging'); try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* evento sintético */ } };
+  const move = (e: PointerEvent) => { if (!on) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; el.style.height = Math.max(window.innerHeight * 0.2, Math.min(window.innerHeight * 0.9, h0 + dy)) + 'px'; };
+  const up = (e: PointerEvent) => {
+    if (!on) return; on = false; el.classList.remove('dragging');
+    if (!moved) { setDetent((detent + 1) % DETENTS.length); return; }
+    const vel = (y0 - e.clientY) / Math.max(1, e.timeStamp - t0); // px/ms (+ = hacia arriba)
+    const pct = ((h0 + (y0 - e.clientY)) / window.innerHeight) * 100 + vel * 120;
+    let best = 0; DETENTS.forEach((d, i) => { if (Math.abs(d - pct) < Math.abs(DETENTS[best] - pct)) best = i; });
+    setDetent(best);
+  };
+  for (const h of [el.querySelector('.grab')!, $('lhead')]) { h.addEventListener('pointerdown', down as EventListener); h.addEventListener('pointermove', move as EventListener); h.addEventListener('pointerup', up as EventListener); h.addEventListener('pointercancel', up as EventListener); }
+})();
 
 // ============ Modo general (sin línea) ============
 function drawStops() {
@@ -378,8 +400,8 @@ function destSearch(raw: string) {
 }
 $('go').onclick = () => {
   mode = mode === 'dest' ? 'search' : 'dest';
-  const q = $('q') as HTMLInputElement; q.value = ''; q.placeholder = mode === 'dest' ? '¿A dónde vas? (parada o dirección)' : 'Buscar parada o línea…';
-  $('go').style.background = mode === 'dest' ? '#cfe0ff' : ''; showResults([]); if (mode === 'dest') q.focus();
+  const q = $('q') as HTMLInputElement; q.value = ''; q.placeholder = mode === 'dest' ? '¿A dónde vas? Parada o dirección' : 'Buscar parada o línea';
+  $('go').classList.toggle('active', mode === 'dest'); showResults([]); if (mode === 'dest') q.focus();
 };
 function origin(): Promise<Pt> {
   return new Promise((ok) => {
@@ -391,7 +413,7 @@ function origin(): Promise<Pt> {
 }
 const walkMin = (m: number) => Math.max(1, Math.round(m / 75));
 async function planTo(d: Dest) {
-  mode = 'search'; $('go').style.background = ''; ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).placeholder = 'Buscar parada o línea…'; $('results').hidden = true;
+  mode = 'search'; $('go').classList.remove('active'); ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).placeholder = 'Buscar parada o línea'; $('results').hidden = true;
   if (sel) closeLine();
   toast('Calculando ruta…');
   const from = await origin();
