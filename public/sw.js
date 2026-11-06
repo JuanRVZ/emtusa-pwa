@@ -1,5 +1,5 @@
 // Service worker de Bus Huelva: caché de la app (uso sin conexión) + avisos Web Push.
-const V = 'bush-v9';
+const V = 'bush-v10';
 const SHELL = ['/', '/data/network.json'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
@@ -13,7 +13,7 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   // tiempo real, información, rutas a pie, mapas y el servidor de avisos: siempre por red
   if (u.pathname.startsWith('/tr/') || u.pathname.startsWith('/info/') || u.pathname.startsWith('/walk')) return;
-  if (u.hostname.endsWith('openstreetmap.org') || u.hostname.endsWith('workers.dev')) return;
+  if (u.hostname.endsWith('openstreetmap.org') || u.hostname.endsWith('workers.dev') || u.hostname.endsWith('cloudflareinsights.com')) return;
   // la app y los datos: red primero, y si no hay conexión, la última copia guardada
   e.respondWith(fetch(e.request).then((r) => { if (r.ok) { const cp = r.clone(); caches.open(V).then((c) => c.put(e.request, cp)); } return r; }).catch(() => caches.match(e.request)));
 });
