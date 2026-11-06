@@ -16,6 +16,7 @@ Los datos proceden de la web pública de EMTUSA (https://www.emtusahuelva.com). 
 | App (Vite + TypeScript + Leaflet) | `src/` | Interfaz, planificador, rutas y alarmas locales |
 | Proxy de tiempo real, info y rutas a pie | `functions/` (Cloudflare Pages Functions) | Evita CORS y cachea 20 s – 1 día |
 | Red de líneas y paradas | `public/data/network.json` | Generada por `scripts/build-data.mjs` (CMS de EMTUSA + OSRM) |
+| Índice de calles | `public/data/calles.json` (60 KB) | Calles, plazas, barrios y lugares solo del municipio de Huelva (OpenStreetMap/Overpass), generado con `scripts/build-calles.mjs`; el buscador es local y no envía lo que escribes a nadie |
 | Mapa propio | `public/data/huelva.pmtiles` (2,8 MB) | Extracto vectorial de OpenStreetMap (Protomaps), estilos claro/oscuro; se dibuja con `protomaps-leaflet` y funciona sin conexión |
 | Avisos push y alarmas | `worker/` (Cloudflare Worker + D1 + cron cada minuto) | Vigila los buses y envía Web Push |
 
@@ -28,6 +29,7 @@ npm run dev        # Vite con proxies /tr, /info y /walk
 npm run build      # tsc + vite build
 npm run data       # regenera la red de líneas (tarda ~1 min, cortesía con los servidores)
 npm run health     # comprueba que la API de EMTUSA sigue igual
+node scripts/build-calles.mjs   # regenera el índice de calles de la capital
 ```
 
 ## Regenerar el mapa (opcional, una vez al año aprox.)

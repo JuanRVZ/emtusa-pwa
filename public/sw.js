@@ -1,6 +1,6 @@
 // Service worker de Bus Huelva: caché de la app y del mapa (uso sin conexión) + avisos Web Push.
-const V = 'bush-v13';
-const SHELL = ['/', '/data/network.json', '/data/huelva.pmtiles'];
+const V = 'bush-v14';
+const SHELL = ['/', '/data/network.json', '/data/calles.json', '/data/huelva.pmtiles'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

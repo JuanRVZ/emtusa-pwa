@@ -15,6 +15,9 @@ type Tracked = { s0: number; s1: number; sNow: number; t0: number; dur: number; 
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const net = (await (await fetch('/data/network.json')).json()) as { paradas: Parada[]; lineas: Linea[] };
+// mismo orden que el selector de líneas de la web oficial de EMTUSA
+const ORDEN = ['1', '2', '3', '3CE', '4', '4CE', '5', '6', '7', '7H', '7HP', '8', 'C83', 'C84', 'C85', 'C88'];
+net.lineas.sort((a, b) => { const i = ORDEN.indexOf(a.codigo), j = ORDEN.indexOf(b.codigo); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j) || a.codigo.localeCompare(b.codigo); });
 const byCode = new Map(net.paradas.map((p) => [p.codigo, p]));
 const lineaDe = new Map(net.lineas.map((l) => [l.codigo, l]));
 const graph = buildGraph(net as never);
@@ -52,7 +55,6 @@ const lineLayer = L.layerGroup().addTo(map);
 
 let current: Parada | null = null;
 let mode: 'search' | 'dest' = 'search';
-let geoTimer: number | undefined;
 let favs: string[] = JSON.parse(localStorage.getItem('favs') ?? '[]');
 const mineStore: Record<string, { dir: number; code: string }> = JSON.parse(localStorage.getItem('mine') ?? '{}');
 
@@ -582,6 +584,28 @@ function setMineFromMap(p: Parada) { if (sel?.route.stops.some((s) => s.codigo =
 $('close').onclick = closeStopSheet;
 $('fav').onclick = () => { if (!current) return; const c = current.codigo; favs = favs.includes(c) ? favs.filter((x) => x !== c) : [...favs, c]; localStorage.setItem('favs', JSON.stringify(favs)); paintFav(); };
 
+// ---- Calles, plazas, barrios y lugares: índice propio, solo del municipio de Huelva (sin enviar nada a terceros) ----
+type Sitio = { n: string; k: number; lat: number; lon: number; tw: string[] };
+const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar'];
+const SKIP = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'en']);
+const ABBR: Record<string, string> = { av: 'avenida', avda: 'avenida', avd: 'avenida', c: 'calle', cl: 'calle', pza: 'plaza', plza: 'plaza', pl: 'plaza', pso: 'paseo', ps: 'paseo', ctra: 'carretera', gta: 'glorieta', glta: 'glorieta', bda: 'barriada', urb: 'urbanizacion', hosp: 'hospital', sta: 'santa', sto: 'santo' };
+const tokens = (t: string) => norm(t).replace(/[.,/()'"-]/g, ' ').split(/\s+/).filter(Boolean).map((w) => ABBR[w] ?? w).filter((w) => !SKIP.has(w));
+let sitios: Sitio[] = [];
+fetch('/data/calles.json').then((r) => r.json()).then((j: { d: [string, number, number, number][] }) => { sitios = j.d.map(([n, k, lat, lon]) => ({ n, k, lat, lon, tw: tokens(n) })); }).catch(() => { /* sin índice: solo paradas y líneas */ });
+function buscarSitios(raw: string, max: number): Sitio[] {
+  const q = tokens(raw); if (!q.length) return [];
+  const hits: { s: Sitio; sc: number }[] = [];
+  for (const s of sitios) {
+    const used = new Set<number>(); let ok = true; let sc = 0;
+    for (const t of q) { const i = s.tw.findIndex((w, idx) => !used.has(idx) && w.startsWith(t)); if (i < 0) { ok = false; break; } used.add(i); sc += s.tw[i] === t ? 0 : 1; }
+    if (!ok) continue;
+    sc += s.tw.indexOf(s.tw[[...used][0]]) * 2 + (s.tw[0] === q[0] ? 0 : 3) + s.k * 0.5 + s.tw.length * 0.1; // mejor si coincide al principio y es calle
+    hits.push({ s, sc });
+  }
+  return hits.sort((a, b) => a.sc - b.sc).slice(0, max).map((h) => h.s);
+}
+const sitioItem = (s: Sitio) => ({ t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: `${KIND_NAME[s.k]} · Huelva`, go: () => planTo({ lat: s.lat, lon: s.lon, name: s.n }) });
+
 function showResults(items: { t: string; s: string; go: () => void }[]) {
   const ul = $('results'); ul.innerHTML = '';
   for (const i of items) { const li = document.createElement('li'); li.innerHTML = `<span>${i.t}</span><small>${i.s}</small>`; li.onclick = i.go; ul.append(li); }
@@ -598,8 +622,8 @@ $('q').addEventListener('input', (e) => {
   const ls = net.lineas.filter((l) => norm(l.codigo) === q || norm(l.nombre).includes(q)).map((l) => ({
     t: `Línea ${esc(l.codigo)}`, s: esc(l.nombre), go: () => { $('results').hidden = true; selectLine(l.codigo); },
   }));
-  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 15).map((p) => ({ t: esc(p.nombre), s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
-  showResults([...ls, ...ps]);
+  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
+  showResults([...ls, ...buscarSitios(raw, 6).map(sitioItem), ...ps]);
 });
 
 $('loc').onclick = () => {
@@ -618,22 +642,13 @@ $('loc').onclick = () => {
 // ============ Cómo llegar ============
 type Dest = Pt & { name: string };
 function destSearch(raw: string) {
+  if (!raw.trim()) return showResults([]);
+  const hits = buscarSitios(raw, 10);
+  if (hits.length) return showResults(hits.map(sitioItem));
+  // sin calles con ese nombre: paradas de bus de la zona (por si es un barrio que no figura como tal en el mapa)
   const q = norm(raw);
-  if (!q) return showResults([]);
-  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q)).slice(0, 6)
-    .map((p) => ({ t: '🚏 ' + esc(p.nombre), s: p.lineas.join(' '), go: () => planTo({ lat: p.lat, lon: p.lon, name: p.nombre }) }));
+  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q)).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: 'Parada · ' + p.lineas.join(' '), go: () => planTo({ lat: p.lat, lon: p.lon, name: p.nombre }) }));
   showResults(ps);
-  clearTimeout(geoTimer);
-  if (q.length < 3) return;
-  geoTimer = window.setTimeout(async () => {
-    try {
-      const u = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=es&accept-language=es&viewbox=-7.06,37.34,-6.80,37.17&bounded=1&q=' + encodeURIComponent(raw + ', Huelva');
-      const res = (await (await fetch(u)).json()) as { display_name: string; lat: string; lon: string; name?: string }[];
-      if (mode !== 'dest') return;
-      const pl = res.map((r) => ({ t: '📍 ' + esc(r.name || r.display_name.split(',')[0]), s: esc(r.display_name.split(',').slice(1, 3).join(',').trim()), go: () => planTo({ lat: +r.lat, lon: +r.lon, name: r.name || r.display_name.split(',')[0] }) }));
-      showResults([...ps, ...pl]);
-    } catch { /* sin geocodificador: quedan las paradas */ }
-  }, 600);
 }
 $('go').onclick = () => {
   saving = null; mode = mode === 'dest' ? 'search' : 'dest';
