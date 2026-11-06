@@ -272,8 +272,10 @@ function updateMine() {
     : next ? `${hhmm(next.hora)} · ${next.enVivo ? '<b class="rt">en directo</b>' : 'según horario'}${arr[1] ? ` · luego ${etaTxt(arr[1].hora)}` : ''}` : 'Sin llegadas previstas';
   box.hidden = false;
   box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><button id="mclear" aria-label="Quitar">✕</button></div>
-    <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>`;
+    <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
+    <div class="alrow"><span>🔔 Avisarme a</span><div class="alopts">${[2, 5, 10].map((m) => `<button data-m="${m}" class="${isMyAlarm(m) ? 'on' : ''}">${m} min</button>`).join('')}</div></div>`;
   $('mclear').onclick = clearMine;
+  box.onclick = (e) => { const b = (e.target as HTMLElement).closest('button[data-m]') as HTMLElement | null; if (b) toggleAlarm(+b.dataset.m!); };
 }
 setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
 
@@ -294,6 +296,96 @@ function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1
   };
   for (const h of [el.querySelector('.grab')!, $('lhead')]) { h.addEventListener('pointerdown', down as EventListener); h.addEventListener('pointermove', move as EventListener); h.addEventListener('pointerup', up as EventListener); h.addEventListener('pointercancel', up as EventListener); }
 })();
+
+// ============ Alarma "avísame cuando mi bus esté a X min" ============
+type Alarm = { linea: string; dir: number; code: string; min: number };
+let alarm: Alarm | null = null;
+try { alarm = JSON.parse(localStorage.getItem('alarm') ?? 'null'); } catch { alarm = null; }
+let wake: { release(): Promise<void>; addEventListener(t: string, f: () => void): void } | null = null;
+let audio: AudioContext | null = null;
+let alarmTimer: number | undefined;
+
+const isMyAlarm = (m: number) => !!alarm && !!sel && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir && alarm.code === sel.mine && alarm.min === m;
+
+function toggleAlarm(min: number) {
+  if (!sel?.mine) return;
+  try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ } // hay que desbloquearlo con un gesto del usuario
+  if (isMyAlarm(min)) { alarm = null; toast('Alarma cancelada'); }
+  else {
+    alarm = { linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, min };
+    toast(`Te aviso cuando falten ${min} min. Mantén la app abierta`);
+    try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* iOS sin PWA instalada */ }
+  }
+  saveAlarm(); alarmCheck();
+}
+
+function saveAlarm() {
+  try { if (alarm) localStorage.setItem('alarm', JSON.stringify(alarm)); else localStorage.removeItem('alarm'); } catch { /* ignorar */ }
+  paintAlarm(); manageWake(); updateMine();
+  clearInterval(alarmTimer); if (alarm) alarmTimer = window.setInterval(alarmCheck, 15000);
+}
+
+async function manageWake() { // pantalla encendida mientras haya alarma: iOS pausa las webs en segundo plano
+  try {
+    const nav = navigator as unknown as { wakeLock?: { request(t: string): Promise<NonNullable<typeof wake>> } };
+    if (alarm && !wake && nav.wakeLock) { wake = await nav.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
+    else if (!alarm && wake) { await wake.release(); wake = null; }
+  } catch { wake = null; }
+}
+
+function paintAlarm() {
+  const el = $('alarm');
+  if (!alarm) { el.hidden = true; return; }
+  const p = byCode.get(alarm.code); el.hidden = false;
+  el.innerHTML = `<span class="al-t">🔔 L${esc(alarm.linea)} · ${esc(p?.nombre ?? '')} · ≤${alarm.min} min</span><button aria-label="Cancelar alarma">✕</button>`;
+  (el.querySelector('.al-t') as HTMLElement).onclick = () => { if (alarm) selectLine(alarm.linea, { dir: alarm.dir, stop: alarm.code }); };
+  (el.querySelector('button') as HTMLElement).onclick = () => { alarm = null; saveAlarm(); toast('Alarma cancelada'); };
+}
+
+async function alarmCheck() {
+  const a = alarm; if (!a) return;
+  const rec = lineaDe.get(a.linea)?.recorridos[a.dir]; if (!rec) return;
+  const route = new Route(rec, byCode); const idx = route.stops.findIndex((x) => x.codigo === a.code); if (idx < 0) return;
+  const [rb, ra] = await Promise.allSettled([fetch('/tr/buses').then((r) => r.json()), fetch(`/tr/${encodeURIComponent(a.linea)}`).then((r) => r.json())]);
+  if (alarm !== a) return;
+  const buses = rb.status === 'fulfilled' ? (rb.value.buses as Bus[] | null) : null;
+  const llg = ra.status === 'fulfilled' ? (ra.value.llegadas as LlegadaLinea[] | null) : null;
+  let m: number | null = null;
+  const live = llg?.find((x) => x.parada === a.code && x.enVivo); if (live) m = mins(live.hora);
+  if (m === null && buses) {
+    const sp = route.stopPos[idx];
+    for (const b of buses) {
+      if (b.linea !== a.linea || b.sentido !== a.dir + 1) continue;
+      const sn = route.snap(b.lat, b.lon); if (!sn || sn.d > 250 || sn.s > sp + 25) continue;
+      const e = Math.max(0, Math.round(((sp - sn.s) / 4.5 + (idx - route.lastPassed(sn.s)) * 20) / 60));
+      if (m === null || e < m) m = e;
+    }
+  }
+  if (m !== null && m <= a.min) fireAlarm(a, m);
+}
+
+function beep() {
+  try {
+    if (!audio) return; const t = audio.currentTime;
+    [0, 0.28, 0.56].forEach((d) => { const o = audio!.createOscillator(), g = audio!.createGain(); o.frequency.value = 880; o.connect(g); g.connect(audio!.destination); g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.4, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.22); o.start(t + d); o.stop(t + d + 0.25); });
+  } catch { /* ignorar */ }
+}
+
+function fireAlarm(a: Alarm, m: number) {
+  const p = byCode.get(a.code); alarm = null; saveAlarm();
+  const msg = m <= 0 ? `¡Tu bus L${a.linea} está llegando a ${p?.nombre}!` : `Tu bus L${a.linea} llega a ${p?.nombre} en ~${m} min`;
+  const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>🔔 ${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
+  beep(); try { navigator.vibrate?.([300, 120, 300, 120, 300]); } catch { /* iOS no vibra */ }
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const opts = { body: msg, tag: 'bus-alarm', icon: '/icon-192.png' };
+      if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then((r) => { if (r) void r.showNotification('Bus Huelva', opts); else new Notification('Bus Huelva', opts); });
+      else new Notification('Bus Huelva', opts);
+    }
+  } catch { /* ignorar */ }
+}
+
+paintAlarm(); if (alarm) { alarmTimer = window.setInterval(alarmCheck, 15000); alarmCheck(); manageWake(); }
 
 // ============ Modo general (sin línea) ============
 function drawStops() {
@@ -469,5 +561,5 @@ function renderPlan(p: Plan, to: Dest) {
 // ============ Arranque ============
 drawStops(); loadBuses();
 setInterval(() => { if (!document.hidden) { loadBuses(); loadArrivals(); } }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); if (alarm) { manageWake(); alarmCheck(); } } });
 if ('serviceWorker' in navigator && import.meta.env.PROD) navigator.serviceWorker.register('/sw.js');

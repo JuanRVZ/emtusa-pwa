@@ -127,7 +127,7 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 .follow { margin-top:8px; padding:7px 12px; border:0; border-radius:14px; background:color-mix(in srgb, var(--blue) 14%, transparent); color:var(--blue); font-size:13px; font-weight:600; }
 
 /* toast */
-#status { position:fixed; z-index:1003; left:50%; top:calc(env(safe-area-inset-top) + 112px); transform:translate(-50%,-8px); padding:9px 16px; border-radius:20px; font-size:14px; font-weight:500; pointer-events:none; opacity:0; transition:opacity .25s, transform .25s; box-shadow:var(--shadow); background:var(--glass); -webkit-backdrop-filter:blur(24px); backdrop-filter:blur(24px); max-width:88vw; text-align:center; }
+#status { position:fixed; z-index:1003; left:50%; top:calc(env(safe-area-inset-top) + 156px); transform:translate(-50%,-8px); padding:9px 16px; border-radius:20px; font-size:14px; font-weight:500; pointer-events:none; opacity:0; transition:opacity .25s, transform .25s; box-shadow:var(--shadow); background:var(--glass); -webkit-backdrop-filter:blur(24px); backdrop-filter:blur(24px); max-width:88vw; text-align:center; }
 #status.on { opacity:1; transform:translate(-50%,0); }
 
 /* marcadores del mapa */
@@ -148,3 +148,18 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
 
 .leaflet-container.z-low .min-tip { display:none !important; }
+
+/* alarma */
+.alrow { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; padding-top:9px; border-top:1px solid rgba(255,255,255,.22); font-size:14px; font-weight:600; }
+.alopts { display:flex; gap:6px; }
+.alopts button { border:0; border-radius:14px; padding:6px 11px; background:rgba(255,255,255,.22); color:#fff; font-size:13px; font-weight:700; transition:background .2s, transform .15s; }
+.alopts button:active { transform:scale(.94); }
+.alopts button.on { background:#fff; color:var(--blue); }
+#alarm { position:fixed; z-index:998; top:calc(env(safe-area-inset-top) + 106px); left:12px; right:12px; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 8px 8px 14px; border-radius:16px; font-size:13px; font-weight:600; box-shadow:var(--shadow-s); background:var(--glass); -webkit-backdrop-filter:blur(28px) saturate(180%); backdrop-filter:blur(28px) saturate(180%); animation:pop .25s; }
+#alarm[hidden] { display:none; }
+#alarm .al-t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+#alarm button { width:26px; height:26px; border:0; border-radius:50%; background:var(--fill); color:var(--mut); font-size:12px; font-weight:700; }
+#ring { position:fixed; z-index:1100; left:12px; right:12px; top:calc(env(safe-area-inset-top) + 10px); padding:16px; border-radius:20px; color:#fff; background:linear-gradient(145deg,#ff9f0a,#ff375f); box-shadow:0 12px 36px rgba(255,55,95,.5); animation:shake .6s, pop .3s; }
+#ring[hidden] { display:none; }
+#ring b { display:block; font-size:17px; } #ring small { opacity:.85; }
+@keyframes shake { 20% { transform:translateX(-6px); } 40% { transform:translateX(6px); } 60% { transform:translateX(-4px); } 80% { transform:translateX(4px); } }
