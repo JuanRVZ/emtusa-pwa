@@ -219,3 +219,15 @@ button:focus:not(:focus-visible), .srow:focus:not(:focus-visible) { outline:none
 .mopts[hidden] { display:none; }
 
 .round[hidden] { display:none; }
+
+/* ---- pantalla completa (PWA instalada) ---- */
+html, body { height:100%; min-height:100dvh; }
+@media (display-mode: standalone) {
+  /* el mapa pasa por detrás de la barra de estado; un degradado oscuro mantiene legibles la hora y la batería */
+  body::before { content:""; position:fixed; z-index:1200; top:0; left:0; right:0; height:calc(env(safe-area-inset-top) + 22px); background:linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); pointer-events:none; }
+}
+/* hojas pegadas al borde inferior, como las de iOS */
+.sheet { left:0; right:0; bottom:0; border-radius:26px 26px 0 0; padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+#lsheet, .sheet.auto { box-shadow:0 -6px 28px rgba(0,0,0,.28); }
+#lsheet { padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+#status { top:calc(env(safe-area-inset-top) + 150px); }
