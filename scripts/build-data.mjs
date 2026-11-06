@@ -18,10 +18,11 @@ for (const l of cms.docs) {
   for (const m of t.matchAll(/"nombre":"([^"]+)","codigo":"([^"]+)","lat":(-?[\d.]+),"lon":(-?[\d.]+)/g)) {
     coords.set(m[2], { lat: +m[3], lon: +m[4] });
   }
-  const recorridos = l.recorridos.map((r) => ({
-    sentido: r.sentido,
-    paradas: r.paradas.filter((p) => p.codigo).map((p) => p.codigo),
-  }));
+  const recorridos = [];
+  for (const r of l.recorridos) {
+    const codes = r.paradas.filter((p) => p.codigo).map((p) => p.codigo);
+    recorridos.push({ sentido: r.sentido, paradas: codes });
+  }
   for (const r of l.recorridos) for (const p of r.paradas) {
     if (!p.codigo) continue;
     const c = coords.get(p.codigo);
@@ -29,6 +30,25 @@ for (const l of cms.docs) {
     if (c) { s.lat = c.lat; s.lon = c.lon; }
     s.lineas.add(l.codigo);
     stops.set(p.codigo, s);
+  }
+  // geometría real por calles (OSRM público, una sola vez en el build)
+  for (const rec of recorridos) {
+    const pts = rec.paradas.map((c) => stops.get(c)).filter((x) => x?.lat != null);
+    rec.geom = pts.flatMap((x) => [x.lat, x.lon]); // por defecto: rectas entre paradas
+    rec.pos = null;
+    if (pts.length === rec.paradas.length && pts.length >= 2) {
+      await sleep(1100);
+      try {
+        const co = pts.map((x) => `${x.lon},${x.lat}`).join(';');
+        const j = await (await fetch(`https://router.project-osrm.org/route/v1/driving/${co}?overview=full&geometries=geojson&continue_straight=true`, { headers: UA })).json();
+        if (j.code === 'Ok') {
+          rec.geom = j.routes[0].geometry.coordinates.flatMap(([lo, la]) => [+la.toFixed(5), +lo.toFixed(5)]);
+          let acc = 0; rec.pos = [0, ...j.routes[0].legs.map((lg) => (acc += lg.distance))].map(Math.round);
+          rec.len = Math.round(j.routes[0].distance);
+        }
+      } catch (e) { console.warn('  OSRM falló para', l.codigo, rec.sentido, e.message); }
+    }
+    console.log('  ', rec.sentido, rec.pos ? `calles ✓ ${rec.len} m` : 'solo rectas');
   }
   lines.push({ codigo: l.codigo, nombre: l.nombre, color: l.color, recorridos });
   console.log(l.codigo.padEnd(5), l.nombre, '→', coords.size, 'coords');
