@@ -4,6 +4,7 @@ import './style.css';
 import { buildGraph, planAll, dist, PROFILES, type Pt, type Plan, type Parada } from './planner';
 import { Route, type Rec } from './route';
 import { leafletLayer } from 'protomaps-leaflet';
+import { PMTiles, type Source } from 'pmtiles';
 import { pushSupported, getPushId, enablePush, createAlarm, deleteAlarm, listAlarms, testPush, type ServerAlarm } from './push';
 
 type Linea = { codigo: string; nombre: string; color: string; recorridos: Rec[] };
@@ -20,24 +21,29 @@ const graph = buildGraph(net as never);
 const REFRESH = 20000;
 
 const map = L.map('map', { zoomControl: false }).setView([37.2614, -6.9447], 14);
-// Mapa propio: vector de OpenStreetMap (extracto de Protomaps) alojado junto a la app, con estilo claro/oscuro real.
-// Si el archivo no se puede leer, se usa el mapa raster público de OpenStreetMap como respaldo.
+// Mapa propio: vector de OpenStreetMap (extracto de Protomaps, 2,8 MB) alojado junto a la app, con estilo claro/oscuro real.
+// Se descarga entero una vez y se lee desde memoria (Cloudflare Pages no admite lecturas por trozos); si falla, se usa el mapa raster público.
 const AREA = L.latLngBounds([37.18, -7.05], [37.36, -6.82]);
 map.setMinZoom(11); map.setMaxBounds(AREA.pad(0.15));
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
-let baseLayer: L.Layer | null = null;
 const forcedFlavor = ({ claro: 'light', oscuro: 'dark' } as Record<string, string>)[new URLSearchParams(location.search).get('mapa') ?? ''] ?? null; // ?mapa=claro|oscuro (solo para revisar estilos)
-const vectorOk = await (async () => {
-  try { const r = await fetch('/data/huelva.pmtiles', { headers: { Range: 'bytes=0-15' } }); return r.status === 206 && (await r.arrayBuffer()).byteLength === 16; } catch { return false; }
-})();
+class MemSource implements Source {
+  constructor(private buf: ArrayBuffer) {}
+  getKey() { return 'huelva'; }
+  async getBytes(offset: number, length: number) { return { data: this.buf.slice(offset, offset + length) }; }
+}
+let pm: PMTiles | null = null; let baseLayer: L.Layer | null = null;
 function addBase() {
   baseLayer?.remove();
-  baseLayer = (vectorOk
-    ? leafletLayer({ url: '/data/huelva.pmtiles', flavor: forcedFlavor ?? (darkMq.matches ? 'dark' : 'light'), lang: 'es', maxZoom: 19, maxDataZoom: 15, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://protomaps.com">Protomaps</a>' })
+  baseLayer = (pm
+    ? leafletLayer({ url: pm, flavor: forcedFlavor ?? (darkMq.matches ? 'dark' : 'light'), lang: 'es', maxZoom: 19, maxDataZoom: 15, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://protomaps.com">Protomaps</a>' })
     : L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' })) as L.Layer;
   baseLayer.addTo(map); (baseLayer as unknown as { bringToBack?: () => void }).bringToBack?.();
 }
-addBase(); darkMq.addEventListener('change', addBase);
+darkMq.addEventListener('change', addBase);
+fetch('/data/huelva.pmtiles').then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('mapa no disponible'))))
+  .then((buf) => { pm = new PMTiles(new MemSource(buf)); addBase(); })
+  .catch(() => addBase()); // sin el archivo propio: mapa raster de OpenStreetMap
 map.on('zoomend', () => map.getContainer().classList.toggle('z-low', map.getZoom() < 15)); map.getContainer().classList.toggle('z-low', map.getZoom() < 15);
 const stopLayer = L.layerGroup().addTo(map);
 const busLayer = L.layerGroup().addTo(map);

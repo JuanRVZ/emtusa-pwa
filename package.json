@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "leaflet": "1.9.4",
+    "pmtiles": "^3.2.1",
     "protomaps-leaflet": "^5.1.0"
   },
   "devDependencies": {
