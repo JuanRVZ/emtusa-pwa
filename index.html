@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Bus Huelva</title>
+  <meta name="theme-color" content="#0b3d91" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bus Huelva" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+</head>
+<body>
+  <div id="map"></div>
+  <header id="bar">
+    <input id="q" type="search" placeholder="Buscar parada o línea…" autocomplete="off" />
+    <button id="loc" aria-label="Paradas cercanas">📍</button>
+  </header>
+  <ul id="results" hidden></ul>
+  <section id="sheet" hidden>
+    <div class="grab"></div>
+    <div class="head"><div><h2 id="sname"></h2><small id="smeta"></small></div>
+      <div><button id="fav" aria-label="Favorita">☆</button><button id="close" aria-label="Cerrar">✕</button></div></div>
+    <ul id="arr"></ul>
+  </section>
+  <div id="status"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
