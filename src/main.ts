@@ -55,6 +55,7 @@ let arrivals = new Map<string, LlegadaLinea[]>();
 let liveOk = true;
 let mineSeg: L.Polyline | null = null;
 let mineMarker: L.Marker | null = null;
+let stopMarkers: L.CircleMarker[] = [];
 let refreshTimer: number | undefined;
 
 function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
@@ -97,21 +98,27 @@ function drawLine(fit: boolean) {
   const { route, linea } = sel;
   L.polyline(route.pts, { color: '#fff', weight: 10, opacity: 0.95 }).addTo(lineLayer);
   L.polyline(route.pts, { color: linea.color, weight: 6, opacity: 0.95 }).addTo(lineLayer);
-  route.stops.forEach((p, i) => {
+  stopMarkers = route.stops.map((p, i) => {
     const end = i === 0 || i === route.stops.length - 1;
-    L.circleMarker([p.lat, p.lon], { radius: end ? 7 : 5, color: linea.color, weight: 2, fillColor: '#fff', fillOpacity: 1 })
-      .bindTooltip(esc(p.nombre), { direction: 'top', offset: [0, -4] })
+    return L.circleMarker([p.lat, p.lon], { radius: end ? 7 : 5, color: linea.color, weight: 2, fillColor: '#fff', fillOpacity: 1 })
+      .bindTooltip('', { permanent: true, direction: 'right', offset: [6, 0], className: 'min-tip' })
       .on('click', () => setMine(p.codigo)).addTo(lineLayer);
   });
+  paintMinutes();
   updateMineMarker();
   if (fit) map.fitBounds(L.latLngBounds(route.pts).pad(0.12), { paddingBottomRight: [0, window.innerHeight * 0.38] });
+}
+
+function paintMinutes() {
+  if (!sel) return;
+  stopMarkers.forEach((m, i) => { const e = etaFor(i); const show = e && (e.src !== 'plan' || e.min < 90); m.setTooltipContent(show ? `<b class="${e.src}">${e.min}'</b>` : ''); const t = m.getTooltip()?.getElement(); if (t) t.style.display = show ? '' : 'none'; });
 }
 
 function setDir(d: number) {
   if (!sel || d === sel.dir) return;
   const linea = sel.linea; const route = new Route(linea.recorridos[d], byCode);
   const mine = mineStore[linea.codigo]?.dir === d ? mineStore[linea.codigo].code : null;
-  clearLine(); sel = { linea, dir: d, route, mine: mine && route.stops.some((s) => s.codigo === mine) ? mine : null };
+  clearLine(); stopMarkers = []; sel = { linea, dir: d, route, mine: mine && route.stops.some((s) => s.codigo === mine) ? mine : null };
   drawLine(true); renderPanel(); refreshLive();
 }
 
@@ -145,7 +152,7 @@ async function refreshLive() {
   liveOk = buses !== null;
   if (buses) ingestBuses(buses);
   if (llg) { arrivals = new Map(); for (const a of llg) { const l = arrivals.get(a.parada) ?? []; l.push(a); arrivals.set(a.parada, l); } }
-  renderPanel(); updateMine();
+  renderPanel(); updateMine(); paintMinutes();
 }
 
 function newTracked(s: number): Tracked {
@@ -196,6 +203,25 @@ function updateSeg() {
   if (!mineSeg) mineSeg = L.polyline(pts, { color: '#111', weight: 5, opacity: 0.85, dashArray: '1 9', lineCap: 'round' }).addTo(lineLayer); else mineSeg.setLatLngs(pts);
 }
 
+/** Minutos que faltan para que un bus llegue a la parada i de la línea seleccionada. */
+type Eta = { min: number; src: 'live' | 'est' | 'plan'; txt: string };
+function etaFor(i: number): Eta | null {
+  if (!sel) return null;
+  const route = sel.route; const sp = route.stopPos[i];
+  const a = arrivals.get(route.stops[i].codigo)?.[0];
+  const apiMin = a ? mins(a.hora) : null;
+  let est: number | null = null;
+  for (const t of tracked) {
+    const remain = sp - t.sNow; if (remain < -25) continue;
+    const e = Math.max(0, Math.round((remain / 4.5 + (i - route.lastPassed(t.sNow)) * 20) / 60));
+    if (est === null || e < est) est = e;
+  }
+  if (a && apiMin !== null && apiMin < 90 && a.enVivo) return { min: apiMin, src: 'live', txt: apiMin === 0 ? 'ya' : `${apiMin} min` };
+  if (est !== null) return { min: est, src: 'est', txt: est === 0 ? 'ya' : `~${est} min` };
+  if (a && apiMin !== null) return { min: apiMin, src: 'plan', txt: etaTxt(a.hora) };
+  return null;
+}
+
 // ---------- Panel inferior de la línea ----------
 function renderPanel() {
   if (!sel) return;
@@ -211,8 +237,8 @@ function renderPanel() {
   const list = $('slist'); const keep = list.scrollTop;
   const rows: string[] = [];
   route.stops.forEach((p, i) => {
-    const a = arrivals.get(p.codigo)?.[0];
-    const et = a ? `<span class="et ${a.enVivo ? 'live' : ''}">${etaTxt(a.hora)}</span>` : '<span class="et none">—</span>';
+    const e = etaFor(i);
+    const et = e ? `<span class="et ${e.src}">${e.txt}</span>` : '<span class="et none">—</span>';
     rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}"><i class="dot" style="--c:${linea.color}"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
       rows.push(`<li class="brow" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
@@ -243,7 +269,7 @@ function updateMine() {
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>`;
   $('mclear').onclick = clearMine;
 }
-setInterval(() => { if (sel) updateMine(); }, 5000);
+setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); } }, 5000);
 
 $('lsheet').addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('.grab')) $('lsheet').classList.toggle('full'); });
 

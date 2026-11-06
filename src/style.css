@@ -62,6 +62,7 @@ html, body { margin:0; height:100%; font:16px -apple-system, system-ui, sans-ser
 .nm { flex:1; min-width:0; } .nm small { margin-left:8px; color:var(--mut); font-size:12px; }
 .et { font-weight:700; min-width:58px; text-align:right; } .et.none { color:var(--mut); font-weight:400; }
 .et.live { color:#0a8f3c; } .et.live::before { content:"● "; font-size:9px; }
+.et.est { color:#1a73e8; } .et.plan { color:var(--mut); font-weight:600; }
 .brow { display:flex; align-items:center; gap:12px; padding:4px 4px 4px 0; font-size:13px; color:var(--mut); }
 .bdot { flex:none; width:14px; height:14px; margin-left:0; border-radius:3px; background:var(--c); animation:pulse 1.4s infinite; }
 .brow b { color:var(--fg); }
@@ -73,3 +74,7 @@ html, body { margin:0; height:100%; font:16px -apple-system, system-ui, sans-ser
 @keyframes ring { 0% { box-shadow:0 0 0 0 #1a73e8aa; } 100% { box-shadow:0 0 0 16px #1a73e800; } }
 #arr li.tap { cursor:pointer; } #arr li.tap::after { content:"›"; color:var(--mut); font-size:22px; margin-left:4px; }
 .follow { margin-top:8px; border:1px solid var(--line); background:none; color:var(--fg); border-radius:10px; padding:6px 10px; font-size:13px; }
+
+.leaflet-tooltip.min-tip { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:1px 5px; font-size:11px; box-shadow:0 1px 4px #0005; }
+.leaflet-tooltip.min-tip::before { display:none; }
+.min-tip b.live { color:#0a8f3c; } .min-tip b.est { color:#1a73e8; } .min-tip b.plan { color:var(--mut); }
