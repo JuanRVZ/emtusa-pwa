@@ -16,6 +16,7 @@ Los datos proceden de la web pública de EMTUSA (https://www.emtusahuelva.com). 
 | App (Vite + TypeScript + Leaflet) | `src/` | Interfaz, planificador, rutas y alarmas locales |
 | Proxy de tiempo real, info y rutas a pie | `functions/` (Cloudflare Pages Functions) | Evita CORS y cachea 20 s – 1 día |
 | Red de líneas y paradas | `public/data/network.json` | Generada por `scripts/build-data.mjs` (CMS de EMTUSA + OSRM) |
+| Mapa propio | `public/data/huelva.pmtiles` (2,8 MB) | Extracto vectorial de OpenStreetMap (Protomaps), estilos claro/oscuro; se dibuja con `protomaps-leaflet` y funciona sin conexión |
 | Avisos push y alarmas | `worker/` (Cloudflare Worker + D1 + cron cada minuto) | Vigila los buses y envía Web Push |
 
 Todo cabe en los planes gratuitos de Cloudflare para uso personal.
@@ -28,6 +29,13 @@ npm run build      # tsc + vite build
 npm run data       # regenera la red de líneas (tarda ~1 min, cortesía con los servidores)
 npm run health     # comprueba que la API de EMTUSA sigue igual
 ```
+
+## Regenerar el mapa (opcional, una vez al año aprox.)
+Con la herramienta [`pmtiles`](https://github.com/protomaps/go-pmtiles) (verifica el hash del release):
+```
+pmtiles extract https://build.protomaps.com/AAAAMMDD.pmtiles public/data/huelva.pmtiles --bbox=-7.05,37.18,-6.82,37.36 --maxzoom=15
+```
+Las compilaciones diarias están en https://maps.protomaps.com/builds/. Para revisar los estilos: `/?mapa=claro` o `/?mapa=oscuro`.
 
 ## Despliegue
 ```
