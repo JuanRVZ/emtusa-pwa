@@ -248,3 +248,8 @@ html, body { height:100%; min-height:100dvh; }
 .alfield { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 0; border-bottom:.5px solid var(--sep); font-size:15px; }
 .alfield select, .alfield input { font:600 15px var(--font); padding:8px 10px; border:0; border-radius:10px; background:var(--fill); color:var(--fg); min-width:0; max-width:60%; }
 .algroup .primary:last-child { margin-top:12px; }
+
+/* contenido de la hoja de línea: tarjeta + lista se desplazan juntos y nada queda recortado */
+#lbody { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; margin:0 -16px; padding:0 16px 8px; }
+#lbody #slist { flex:none; overflow:visible; margin:0; padding:0; }
+#lbody #mine { flex:none; }

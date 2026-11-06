@@ -107,7 +107,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   arrivals = new Map(); tracked = [];
   renderPanel(); refreshLive();
   clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, REFRESH);
-  if (sel.mine) setTimeout(() => scrollToMine(), 50);
+  if (sel.mine) setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; }, 80);
 }
 
 function clearLine() {
@@ -153,13 +153,22 @@ function setDir(d: number) {
   drawLine(true); renderPanel(); refreshLive();
 }
 
+/** Si la tarjeta "Mi parada" no cabe en la hoja, la sube a la altura mínima que la muestra entera (sin tapar el mapa más de lo necesario). */
+function fitSheet() {
+  const el = $('lsheet'); if (el.hidden || !sel?.mine) return;
+  const hoja = el.getBoundingClientRect().height, cuerpo = $('lbody').getBoundingClientRect().height;
+  const need = (hoja - cuerpo) + $('mine').offsetHeight + 8 + 96; // cabecera + tarjeta entera + asomo de la lista
+  if (need <= hoja) return;
+  const i = DETENTS.findIndex((d) => (d / 100) * window.innerHeight >= need);
+  setDetent(Math.max(i < 0 ? DETENTS.length - 1 : i, detent));
+}
+
 function setMine(code: string) {
   if (!sel) return;
   sel.mine = code;
   mineStore[sel.linea.codigo] = { dir: sel.dir, code }; localStorage.setItem('mine', JSON.stringify(mineStore));
   updateMineMarker(); renderPanel(); updateMine();
-  const p = byCode.get(code)!; focusAbove([p.lat, p.lon]);
-  scrollToMine();
+  setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; const p = byCode.get(code)!; focusAbove([p.lat, p.lon]); }, 60); // la tarjeta queda siempre visible arriba
 }
 
 function focusAbove(ll: [number, number]) {
@@ -271,7 +280,7 @@ function renderPanel() {
   seg.onclick = (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) setDir(+b.dataset.d!); };
   const st = $('lstat'); st.textContent = !liveOk ? 'Sin datos en directo' : tracked.length ? `${tracked.length} bus${tracked.length === 1 ? '' : 'es'} en circulación en este sentido` : 'Ningún bus en este sentido ahora'; st.classList.toggle('on', liveOk && tracked.length > 0);
 
-  const list = $('slist'); const keep = list.scrollTop;
+  const list = $('slist'); const keep = $('lbody').scrollTop;
   const rows: string[] = [];
   route.stops.forEach((p, i) => {
     const e = etaFor(i);
@@ -280,7 +289,7 @@ function renderPanel() {
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
       rows.push(`<li class="brow" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
   });
-  list.innerHTML = rows.join(''); list.scrollTop = keep;
+  list.innerHTML = rows.join(''); $('lbody').scrollTop = keep;
   list.onclick = (e) => { const li = (e.target as HTMLElement).closest('.srow') as HTMLElement | null; if (li) setMine(li.dataset.c!); };
   $('mine').hidden = !sel.mine; updateMine();
 }
@@ -423,7 +432,7 @@ try {
 } catch { /* sin Dynamic Type */ }
 
 // hoja arrastrable con tres alturas (como Mapas de iOS)
-const DETENTS = [30, 52, 86]; let detent = 1;
+const DETENTS = [30, 52, 72, 90]; let detent = 1;
 function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1, i)); const el = $('lsheet'); el.style.height = ''; el.style.setProperty('--h', String(DETENTS[detent])); }
 (() => {
   const el = $('lsheet'); let y0 = 0, h0 = 0, t0 = 0, moved = false, on = false;
