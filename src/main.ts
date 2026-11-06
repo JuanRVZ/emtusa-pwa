@@ -3,7 +3,7 @@ import 'leaflet/dist/leaflet.css';
 import './style.css';
 import { buildGraph, planAll, dist, PROFILES, type Pt, type Plan, type Parada } from './planner';
 import { Route, type Rec } from './route';
-import { pushSupported, getPushId, enablePush, createAlarm, deleteAlarm, listAlarms, type ServerAlarm } from './push';
+import { pushSupported, getPushId, enablePush, createAlarm, deleteAlarm, listAlarms, testPush, type ServerAlarm } from './push';
 
 type Linea = { codigo: string; nombre: string; color: string; recorridos: Rec[] };
 type Llegada = { linea: string; colorLinea: string; hora: string; enVivo: boolean; fiabilidad: number; poste: string };
@@ -297,7 +297,8 @@ function cloudHtml(): string {
   if (!pushSupported()) return /iPhone|iPad/.test(navigator.userAgent) ? '<div class="leave">☁️ Para avisos con la app cerrada, añádela a la pantalla de inicio (Compartir → Añadir a pantalla de inicio)</div>' : '';
   if (!getPushId()) return '<div class="alrow"><span>☁️ Aunque cierre la app</span><div class="alopts"><button data-act="pushon">Activar</button></div></div>';
   const o = (v: string, t: string) => `<option value="${v}" ${repDays === v ? 'selected' : ''}>${t}</option>`;
-  return `<div class="alrow rep"><span>🔁 Repetir</span><div class="alopts"><select id="rdays" aria-label="Días">${o('1,2,3,4,5', 'L–V')}${o('0,1,2,3,4,5,6', 'Todos')}${o('0,6', 'Fin de semana')}</select><input type="time" id="rtime" value="${repTime}" aria-label="Hora" /><select id="rmin" aria-label="Minutos de antelación">${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button data-act="repeat">Crear</button></div></div>`;
+  return `<div class="alrow"><span>☁️ Avisos en la nube activados</span><div class="alopts"><button data-act="pushtest">Probar</button></div></div>
+    <div class="alrow rep"><span>🔁 Repetir</span><div class="alopts"><select id="rdays" aria-label="Días">${o('1,2,3,4,5', 'L–V')}${o('0,1,2,3,4,5,6', 'Todos')}${o('0,6', 'Fin de semana')}</select><input type="time" id="rtime" value="${repTime}" aria-label="Hora" /><select id="rmin" aria-label="Minutos de antelación">${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button data-act="repeat">Crear</button></div></div>`;
 }
 
 function updateMine() {
@@ -334,6 +335,7 @@ function updateMine() {
     const b = t.closest('button[data-m]') as HTMLElement | null; if (b) { toggleAlarm(+b.dataset.m!); return; }
     const a2 = (t.closest('button[data-act]') as HTMLElement | null)?.dataset.act;
     if (a2 === 'geo') { geoOn = true; try { localStorage.setItem('geoOn', '1'); } catch { /* ignorar */ } await updateUserPos(); if (!userPos) toast('No pude obtener tu ubicación'); }
+    else if (a2 === 'pushtest') { try { await testPush(); toast('Enviado: debería llegarte en unos segundos'); } catch (err) { toast((err as Error).message); } }
     else if (a2 === 'mopts') { mOpen = !mOpen; updateMine(); }
     else if (a2 === 'getoff') toggleGetOff();
     else if (a2 === 'pushon') { try { await enablePush(); toast('Avisos en la nube activados ✓'); updateMine(); loadHomeAlarms(); } catch (err) { toast((err as Error).message); } }
