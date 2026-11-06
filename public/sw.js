@@ -1,5 +1,5 @@
 // Service worker de Bus Huelva: caché de la app (uso sin conexión) + avisos Web Push.
-const V = 'bush-v10';
+const V = 'bush-v11';
 const SHELL = ['/', '/data/network.json'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL))); self.skipWaiting(); });

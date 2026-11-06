@@ -19,7 +19,25 @@ const graph = buildGraph(net as never);
 const REFRESH = 20000;
 
 const map = L.map('map', { zoomControl: false }).setView([37.2614, -6.9447], 14);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+// Mapa de OpenStreetMap con reintentos y servidor de respaldo (el servidor principal es gratuito "por cortesía", sin garantía)
+const PROVIDERS = [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', sub: 'abc' }, { url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', sub: 'abc' }];
+let provIdx = 0; let tileLayer: L.TileLayer | null = null; let tileErrs: number[] = [];
+function addTiles() {
+  tileLayer?.remove();
+  tileLayer = L.tileLayer(PROVIDERS[provIdx].url, { maxZoom: 19, subdomains: PROVIDERS[provIdx].sub, keepBuffer: 1, updateWhenIdle: true, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  tileLayer.bringToBack();
+  tileLayer.on('tileerror', (ev) => {
+    const img = (ev as unknown as { tile: HTMLImageElement }).tile; const n = Number(img.dataset.retry ?? 0); const now = Date.now();
+    tileErrs = tileErrs.filter((t) => now - t < 20000); tileErrs.push(now);
+    if (n < 2) { img.dataset.retry = String(n + 1); const src = img.src; setTimeout(() => { img.src = ''; img.src = src; }, 1500 * (n + 1)); }
+    if (tileErrs.length >= 8 && provIdx === 0) { provIdx = 1; tileErrs = []; toast('Cambiando de servidor de mapa…'); addTiles(); }
+  });
+}
+addTiles();
+// tema del mapa: automático (sigue al iPhone), claro u oscuro
+const mapPref = () => { try { return localStorage.getItem('mapTheme') ?? 'auto'; } catch { return 'auto'; } };
+const applyMapTheme = () => { const p = mapPref(); document.documentElement.dataset.map = p === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : p; };
+applyMapTheme(); matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyMapTheme);
 map.on('zoomend', () => map.getContainer().classList.toggle('z-low', map.getZoom() < 15)); map.getContainer().classList.toggle('z-low', map.getZoom() < 15);
 const stopLayer = L.layerGroup().addTo(map);
 const busLayer = L.layerGroup().addTo(map);
@@ -780,7 +798,9 @@ function renderHome() {
     <div class="quick">${place('home', '🏠', 'Casa')}${place('work', '💼', 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">🎫</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
     <div id="hal"></div>
     <h3 class="sec">Mis paradas</h3>
-    ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}`;
+    ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}
+    <h3 class="sec">Mapa</h3>
+    <div class="segc" id="maptheme">${[['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Oscuro']].map(([v, t]) => `<button data-mt="${v}" class="${mapPref() === v ? 'on' : ''}">${t}</button>`).join('')}</div>`;
   homeArrivals(); loadHomeAlarms();
 }
 
@@ -812,6 +832,7 @@ $('home').addEventListener('pointerdown', (e) => {
 for (const t of ['pointerup', 'pointercancel', 'pointerleave']) $('home').addEventListener(t, () => clearTimeout(pressT));
 $('home').addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
+  const mt = (el.closest('[data-mt]') as HTMLElement | null)?.dataset.mt; if (mt) { try { localStorage.setItem('mapTheme', mt); } catch { /* ignorar */ } applyMapTheme(); renderHome(); return; }
   const fr = el.closest('.frow') as HTMLElement | null; if (fr) { const p = byCode.get(fr.dataset.c!); if (p) openStop(p); return; }
   const b = el.closest('[data-act]') as HTMLElement | null; if (!b) return; const act = b.dataset.act!;
   if (act === 'delal') { deleteAlarm(b.dataset.id!).then(loadHomeAlarms).catch(() => toast('No pude borrar la alarma')); return; }
