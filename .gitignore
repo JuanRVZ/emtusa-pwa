@@ -2,3 +2,8 @@ node_modules
 dist
 .wrangler
 .DS_Store
+
+# capturas de pantalla sueltas
+Captura*.png
+Captura*.jpg
+Screenshot*

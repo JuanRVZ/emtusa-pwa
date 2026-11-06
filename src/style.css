@@ -221,10 +221,6 @@ button:focus:not(:focus-visible), .srow:focus:not(:focus-visible) { outline:none
 
 /* ---- pantalla completa (PWA instalada) ---- */
 html, body { height:100%; min-height:100dvh; }
-@media (display-mode: standalone) {
-  /* el mapa pasa por detrás de la barra de estado; un degradado oscuro mantiene legibles la hora y la batería */
-  body::before { content:""; position:fixed; z-index:900; top:0; left:0; right:0; height:calc(env(safe-area-inset-top) + 4px); background:linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,0)); pointer-events:none; }
-}
 /* hojas pegadas al borde inferior, como las de iOS */
 .sheet { left:0; right:0; bottom:0; border-radius:26px 26px 0 0; padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
 #lsheet, .sheet.auto { box-shadow:0 -6px 28px rgba(0,0,0,.28); }
@@ -253,3 +249,7 @@ html, body { height:100%; min-height:100dvh; }
 #lbody { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; margin:0 -16px; padding:0 16px 8px; }
 #lbody #slist { flex:none; overflow:visible; margin:0; padding:0; }
 #lbody #mine { flex:none; }
+
+/* hojas de altura automática (parada, ruta, inicio): sus bloques no se encogen; si no caben, la hoja se desplaza */
+.sheet.auto { overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+.sheet.auto > * { flex-shrink:0; }
