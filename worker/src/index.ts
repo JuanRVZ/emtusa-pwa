@@ -7,7 +7,7 @@ type Env = { DB: any; VAPID_PUBLIC: string; VAPID_PRIVATE: string; VAPID_SUBJECT
 
 const EMTUSA = 'https://www.emtusahuelva.com/tiempo-real';
 const UA = { 'User-Agent': 'emtusa-pwa-personal/0.1', Accept: 'application/json' };
-const ORIGIN_OK = (o: string) => o === 'https://bus-huelva.pages.dev' || /^https:\/\/[a-z0-9-]+\.bus-huelva\.pages\.dev$/.test(o) || /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(o);
+const ORIGIN_OK = (o: string) => o === 'https://bus-huelva.pages.dev' || o === 'https://bus.juanrvz.dev' || /^https:\/\/[a-z0-9-]+\.bus-huelva\.pages\.dev$/.test(o) || /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(o);
 const MAX_ALARMS = 12;
 
 const cors = (req: Request) => {
