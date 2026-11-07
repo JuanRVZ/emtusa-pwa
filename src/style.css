@@ -257,3 +257,11 @@ html, body { height:100%; min-height:100dvh; }
 #pwarn { margin-top:10px; }
 #pwarn[hidden] { display:none; }
 #pwarn p { margin:0 0 8px; padding:10px 12px; border-radius:14px; font-size:14px; line-height:1.35; background:color-mix(in srgb, var(--orange) 16%, transparent); border-left:4px solid var(--orange); }
+
+/* colocar un lugar en el mapa */
+#pick[hidden] { display:none; }
+#pick .pin { position:fixed; z-index:1004; left:50%; top:50%; font-size:38px; transform:translate(-50%,-100%); filter:drop-shadow(0 3px 4px rgba(0,0,0,.5)); pointer-events:none; }
+#pick .pickbar { position:fixed; z-index:1005; left:0; right:0; bottom:0; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); border-radius:24px 24px 0 0; box-shadow:var(--shadow); background:var(--glass); -webkit-backdrop-filter:blur(30px) saturate(180%); backdrop-filter:blur(30px) saturate(180%); animation:rise .3s; }
+#pick .pickbar b { display:block; font-size:18px; } #pick .pickbar small { display:block; color:var(--mut); margin:2px 0 12px; }
+.pickbtns { display:flex; gap:10px; } .pb { flex:1; padding:13px; border:0; border-radius:14px; background:var(--fill); color:var(--fg); font:600 16px var(--font); } .pb.ok { background:var(--blue); color:#fff; }
+body.picking .sheet, body.picking #lines, body.picking #alarm, body.picking #bar, body.picking #results { display:none !important; }

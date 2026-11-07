@@ -632,11 +632,17 @@ $('fav').onclick = () => { if (!current) return; const c = current.codigo; favs 
 
 // ---- Calles, plazas, barrios y lugares: índice propio, solo del municipio de Huelva (sin enviar nada a terceros) ----
 type Sitio = { n: string; k: number; lat: number; lon: number; tw: string[]; lw: string[]; lab: string; addr: string };
-const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍', '🛍️', '🍽️', '🏢']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar', 'Comercio', 'Restaurante o bar', 'Servicio'];
+const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍', '🛍️', '🍽️', '🏢', '⭐']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar', 'Comercio', 'Restaurante o bar', 'Servicio', 'Mi lugar'];
 const SKIP = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'en']);
 const ABBR: Record<string, string> = { av: 'avenida', avda: 'avenida', avd: 'avenida', c: 'calle', cl: 'calle', pza: 'plaza', plza: 'plaza', pl: 'plaza', pso: 'paseo', ps: 'paseo', ctra: 'carretera', gta: 'glorieta', glta: 'glorieta', bda: 'barriada', urb: 'urbanizacion', hosp: 'hospital', sta: 'santa', sto: 'santo', rest: 'restaurante', super: 'supermercado', farm: 'farmacia' };
 const tokens = (t: string) => norm(t).replace(/[.,/()'"-]/g, ' ').split(/\s+/).filter(Boolean).map((w) => ABBR[w] ?? w).filter((w) => !SKIP.has(w));
 const empieza = (w: string, t: string) => w.startsWith(t) || (t.length > 3 && t.endsWith('s') && w.startsWith(t.slice(0, -1))); // "restaurantes" encuentra "restaurante"
+// ---- Mis lugares: sitios que el usuario añade a mano (para lo que no está en OpenStreetMap) ----
+type Lugar = { n: string; lat: number; lon: number };
+let lugares: Lugar[] = [];
+try { lugares = JSON.parse(localStorage.getItem('lugares') ?? '[]'); } catch { lugares = []; }
+const guardaLugares = () => { try { localStorage.setItem('lugares', JSON.stringify(lugares)); } catch { /* ignorar */ } };
+const misSitios = (): Sitio[] => lugares.map((l) => ({ n: l.n, k: 7, lat: l.lat, lon: l.lon, tw: tokens(l.n), lw: tokens('mi lugar'), lab: 'Mi lugar', addr: '' }));
 let sitios: Sitio[] = [];
 fetch('/data/calles.json').then((r) => r.json()).then((j: { l: string[]; d: [string, number, number, number, number, string?][] }) => {
   sitios = j.d.map(([n, k, lat, lon, li, addr]) => ({ n, k, lat, lon, tw: tokens(n), lab: li >= 0 ? j.l[li] : '', lw: li >= 0 ? tokens(j.l[li]) : [], addr: addr ?? '' }));
@@ -647,7 +653,7 @@ function buscarSitios(raw: string, max: number): Sitio[] {
   const q = tokens(raw); if (!q.length) return [];
   const ref = userPos ?? { lat: map.getCenter().lat, lon: map.getCenter().lng };
   const hits: { s: Sitio; sc: number }[] = [];
-  for (const s of sitios) {
+  for (const s of [...misSitios(), ...sitios]) {
     const used = new Set<number>(); let ok = true; let sc = 0;
     for (const t of q) {
       const i = s.tw.findIndex((w, idx) => !used.has(idx) && empieza(w, t));
@@ -657,7 +663,7 @@ function buscarSitios(raw: string, max: number): Sitio[] {
     }
     if (!ok) continue;
     const first = used.size ? Math.min(...used) : 3;
-    sc += first * 2 + (s.tw[0] === q[0] ? 0 : 3) + s.k * 0.4 + s.tw.length * 0.1;
+    sc += first * 2 + (s.tw[0] === q[0] ? 0 : 3) + (s.k === 7 ? -2 : s.k * 0.4) + s.tw.length * 0.1;
     if (s.k >= 3) sc += (dist(ref, s) / 1000) * 0.2; // más cerca, mejor
     hits.push({ s, sc });
   }
@@ -669,6 +675,17 @@ const sitioItem = (s: Sitio) => {
   const lejos = userPos ? ` · a ${fmtDist(dist(userPos, s))}` : '';
   return { t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: esc((s.lab ? `${s.lab}${dir ? ' · ' + dir : ''}` : `${KIND_NAME[s.k]} · Huelva`) + (s.k >= 3 ? lejos : '')), go: () => planTo({ lat: s.lat, lon: s.lon, name: s.addr && !s.addr.startsWith('~') ? `${s.n} (${s.addr})` : dir ? `${s.n} (${dir})` : s.n }) };
 };
+
+const addItem = (raw: string) => ({ t: `➕ Añadir «${esc(raw.trim())}» como lugar`, s: 'Lo colocas tú en el mapa', go: () => startPick(raw.trim()) });
+/** Modo "colocar un lugar": se mueve el mapa hasta el sitio y se guarda el centro. */
+function startPick(name: string) {
+  $('results').hidden = true; mode = 'search'; $('go').classList.remove('active'); ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).blur();
+  document.body.classList.add('picking'); $('pick').hidden = false; $('pickname').textContent = name;
+  const c = userPos ?? { lat: map.getCenter().lat, lon: map.getCenter().lng }; map.setView([c.lat, c.lon], Math.max(map.getZoom(), 16));
+  $('pickno').onclick = endPick;
+  $('pickok').onclick = () => { const m = map.getCenter(); lugares.push({ n: name, lat: +m.lat.toFixed(5), lon: +m.lng.toFixed(5) }); guardaLugares(); endPick(); toast('Lugar guardado'); void planTo({ lat: m.lat, lon: m.lng, name }); };
+}
+function endPick() { document.body.classList.remove('picking'); $('pick').hidden = true; }
 
 function showResults(items: { t: string; s: string; go: () => void }[]) {
   const ul = $('results'); ul.innerHTML = '';
@@ -687,7 +704,7 @@ $('q').addEventListener('input', (e) => {
     t: `Línea ${esc(l.codigo)}`, s: esc(l.nombre), go: () => { $('results').hidden = true; selectLine(l.codigo); },
   }));
   const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
-  showResults([...ls, ...buscarSitios(raw, 8).map(sitioItem), ...ps]);
+  showResults([...ls, ...buscarSitios(raw, 8).map(sitioItem), ...ps, ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
 });
 
 $('loc').onclick = () => {
@@ -708,11 +725,11 @@ type Dest = Pt & { name: string };
 function destSearch(raw: string) {
   if (!raw.trim()) return showResults([]);
   const hits = buscarSitios(raw, 12);
-  if (hits.length) return showResults(hits.map(sitioItem));
+  if (hits.length) return showResults([...hits.map(sitioItem), ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
   // sin calles con ese nombre: paradas de bus de la zona (por si es un barrio que no figura como tal en el mapa)
   const q = norm(raw);
   const ps = net.paradas.filter((p) => norm(p.nombre).includes(q)).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: 'Parada · ' + p.lineas.join(' '), go: () => planTo({ lat: p.lat, lon: p.lon, name: p.nombre }) }));
-  showResults(ps);
+  showResults([...ps, ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
 }
 $('go').onclick = () => {
   saving = null; mode = mode === 'dest' ? 'search' : 'dest';
@@ -976,6 +993,7 @@ function renderHome() {
     ${avisos.slice(0, 3).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></a>`).join('')}
     <div class="quick">${place('home', '🏠', 'Casa')}${place('work', '💼', 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">🎫</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
     <div id="hal"></div>
+    ${lugares.length ? `<h3 class="sec">Mis lugares</h3><ul class="flist">${lugares.map((l, i) => `<li class="frow lugar" data-i="${i}" role="button" tabindex="0"><span class="nm">⭐ ${esc(l.n)}</span><button class="round" data-act="dellugar" data-i="${i}" aria-label="Borrar ${esc(l.n)}">✕</button></li>`).join('')}</ul>` : ''}
     <h3 class="sec">Mis paradas</h3>
     ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}`;
   homeArrivals(); loadHomeAlarms();
@@ -1009,6 +1027,8 @@ $('home').addEventListener('pointerdown', (e) => {
 for (const t of ['pointerup', 'pointercancel', 'pointerleave']) $('home').addEventListener(t, () => clearTimeout(pressT));
 $('home').addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
+  const dl = el.closest('[data-act="dellugar"]') as HTMLElement | null; if (dl) { lugares.splice(+dl.dataset.i!, 1); guardaLugares(); renderHome(); return; }
+  const lg = el.closest('.lugar') as HTMLElement | null; if (lg) { const l = lugares[+lg.dataset.i!]; if (l) void planTo({ lat: l.lat, lon: l.lon, name: l.n }); return; }
   const fr = el.closest('.frow') as HTMLElement | null; if (fr) { const p = byCode.get(fr.dataset.c!); if (p) openStop(p); return; }
   const b = el.closest('[data-act]') as HTMLElement | null; if (!b) return; const act = b.dataset.act!;
   if (act === 'delal') { deleteAlarm(b.dataset.id!).then(loadHomeAlarms).catch(() => toast('No pude borrar la alarma')); return; }
