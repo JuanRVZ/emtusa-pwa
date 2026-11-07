@@ -18,7 +18,7 @@ export async function onRequestGet({ params, request, waitUntil }) {
   const body = await up.text();
   const res = new Response(up.ok ? body : '{"llegadas":null,"buses":null}', {
     status: 200,
-    headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=20' },
+    headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=5' },
   });
   if (up.ok) waitUntil(cache.put(key, res.clone()));
   return res;

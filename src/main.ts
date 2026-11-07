@@ -11,7 +11,7 @@ type Linea = { codigo: string; nombre: string; color: string; recorridos: Rec[] 
 type Llegada = { linea: string; colorLinea: string; hora: string; enVivo: boolean; fiabilidad: number; poste: string };
 type LlegadaLinea = { parada: string; nombreParada: string | null; hora: string; enVivo: boolean };
 type Bus = { lat: number; lon: number; sentido: number; linea: string; colorLinea: string };
-type Tracked = { s0: number; s1: number; sNow: number; t0: number; dur: number; marker: L.Marker };
+type Tracked = { s0: number; s1: number; sNow: number; t0: number; dur: number; tc: number; marker: L.Marker }; // tc = instante del último cambio real de posición
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const net = (await (await fetch('/data/network.json')).json()) as { paradas: Parada[]; lineas: Linea[] };
@@ -21,7 +21,10 @@ net.lineas.sort((a, b) => { const i = ORDEN.indexOf(a.codigo), j = ORDEN.indexOf
 const byCode = new Map(net.paradas.map((p) => [p.codigo, p]));
 const lineaDe = new Map(net.lineas.map((l) => [l.codigo, l]));
 const graph = buildGraph(net as never);
-const REFRESH = 20000;
+// EMTUSA actualiza las posiciones cada ~16 s (medido: cambios a los 17, 33, 50, 66, 83 y 99 s). Se consulta más a menudo para no sumar retraso
+// (origen 16 s + caché del proxy 5 s + consulta 8 s ≈ 29 s como máximo, frente a ~55 s con 20 s + 20 s), pero la animación dura lo que tarda en llegar el dato siguiente.
+const POLL = 8000;        // cada cuánto se consulta la línea abierta
+const CADENCIA = 16000;   // intervalo de actualización del origen: duración por defecto de la animación
 
 const map = L.map('map', { zoomControl: false }).setView([37.2614, -6.9447], 14);
 // Mapa propio: vector de OpenStreetMap (extracto de Protomaps, 2,8 MB) alojado junto a la app, con estilo claro/oscuro real.
@@ -117,7 +120,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   $('lsheet').hidden = false; setDetent(1);
   arrivals = new Map(); tracked = []; scrollBusPend = true;
   renderPanel(); refreshLive();
-  clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, REFRESH);
+  clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, POLL);
   if (sel.mine) setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; }, 80);
 }
 
@@ -201,8 +204,13 @@ function updateMineMarker() {
   mineMarker = L.marker([p.lat, p.lon], { zIndexOffset: 500, icon: L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17], html: `<div class="mine-pin" style="--c:${sel.linea.color}">🚏</div>` }) }).addTo(lineLayer);
 }
 
+let refrescando = false;
 async function refreshLive() {
-  const s = sel; if (!s) return;
+  const s = sel; if (!s || refrescando) return;
+  refrescando = true;
+  try { await refreshLiveInner(s); } finally { refrescando = false; }
+}
+async function refreshLiveInner(s: Sel) {
   const [rb, ra] = await Promise.allSettled([fetch('/tr/buses').then((r) => r.json()), fetch(`/tr/${encodeURIComponent(s.linea.codigo)}`).then((r) => r.json())]);
   if (sel !== s) return; // el usuario cambió de línea/sentido mientras tanto
   const buses = rb.status === 'fulfilled' ? (rb.value.buses as Bus[] | null) : null;
@@ -216,7 +224,7 @@ async function refreshLive() {
 
 function newTracked(s: number): Tracked {
   const marker = L.marker(sel!.route.at(s), { zIndexOffset: 1000, icon: L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17], html: `<div class="bus-pin" style="--c:${sel!.linea.color}">${esc(sel!.linea.codigo)}</div>` }) }).addTo(lineLayer);
-  return { s0: s, s1: s, sNow: s, t0: performance.now(), dur: REFRESH, marker };
+  return { s0: s, s1: s, sNow: s, t0: performance.now(), dur: CADENCIA, tc: performance.now(), marker };
 }
 
 function ingestBuses(buses: Bus[]) {
@@ -227,7 +235,13 @@ function ingestBuses(buses: Bus[]) {
   for (const sn of snaps) {
     let bi = -1, bd = Infinity;
     old.forEach((o, i) => { const d = sn.s - o.s1; if (d > -120 && d < 2500 && Math.abs(d) < bd) { bd = Math.abs(d); bi = i; } });
-    if (bi >= 0) { const o = old.splice(bi, 1)[0]; o.s0 = o.sNow; o.s1 = Math.max(sn.s, o.sNow); o.t0 = now; o.dur = REFRESH; next.push(o); }
+    if (bi >= 0) {
+      const o = old.splice(bi, 1)[0];
+      if (Math.abs(sn.s - o.s1) > 5) { // posición nueva de verdad: se anima hasta ella durante lo que tardó en llegar (entre 8 y 25 s)
+        o.s0 = o.sNow; o.s1 = Math.max(sn.s, o.sNow); o.t0 = now; o.dur = Math.min(25000, Math.max(8000, now - o.tc)); o.tc = now;
+      } // si el dato es el mismo que ya tenemos, la animación en curso no se toca
+      next.push(o);
+    }
     else next.push(newTracked(sn.s));
   }
   old.forEach((o) => o.marker.remove()); tracked = next;
@@ -1062,7 +1076,8 @@ $('home').addEventListener('click', (e) => {
 
 // ============ Arranque ============
 drawStops(); loadBuses();
-setInterval(() => { if (!document.hidden) { loadBuses(); loadArrivals(); } }, 30000);
+setInterval(() => { if (!document.hidden) loadBuses(); }, 10000);
+setInterval(() => { if (!document.hidden) loadArrivals(); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); if (alarm) { manageWake(); alarmCheck(); } } });
 loadInfo(); showHome();
 window.addEventListener('offline', () => toast('Sin conexión: no hay datos en directo'));
