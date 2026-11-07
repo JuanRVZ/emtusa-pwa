@@ -3,7 +3,7 @@
 // Formato: { k: [tipos], l: [etiquetas], d: [[nombre, tipo, lat, lon, etiqueta, dirección?], ...] }
 import { writeFileSync, readFileSync } from 'node:fs';
 
-const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 const UA = { 'User-Agent': 'emtusa-pwa-personal/0.1 (índice de calles, uso puntual)', 'Content-Type': 'application/x-www-form-urlencoded' };
 const KEYS = ['amenity', 'shop', 'office', 'craft', 'tourism', 'leisure', 'healthcare', 'historic'];
 const Q = `[out:json][timeout:180];
@@ -19,13 +19,18 @@ way(area.h)["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|
 );
 out tags center;`;
 
+// Los servidores públicos de Overpass se saturan a menudo (502/504): se reintenta en rondas, con espera creciente.
 let data;
-for (const ep of ENDPOINTS) {
-  try {
-    const r = await fetch(ep, { method: 'POST', headers: UA, body: 'data=' + encodeURIComponent(Q) });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    data = await r.json(); console.log('Overpass OK:', ep, data.elements.length, 'elementos'); break;
-  } catch (e) { console.warn('Falló', ep, e.message); }
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+for (let ronda = 1; ronda <= 4 && !data; ronda++) {
+  for (const ep of ENDPOINTS) {
+    try {
+      const r = await fetch(ep, { method: 'POST', headers: UA, body: 'data=' + encodeURIComponent(Q), signal: AbortSignal.timeout(200000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json(); console.log(`Overpass OK (ronda ${ronda}):`, ep, data.elements.length, 'elementos'); break;
+    } catch (e) { console.warn(`Falló (ronda ${ronda})`, ep, e.message); }
+  }
+  if (!data && ronda < 4) { const ms = ronda * 45000; console.warn(`Reintentando en ${ms / 1000} s…`); await espera(ms); }
 }
 if (!data) { console.error('No se pudo consultar Overpass'); process.exit(1); }
 

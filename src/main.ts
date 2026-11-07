@@ -739,8 +739,31 @@ async function planTo(d: Dest) {
   current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
   $('pseg').hidden = true; $('ptime').hidden = true;
-  if (!plans.length) { $('smeta').textContent = 'Sin ruta'; $('arr').innerHTML = '<li>No encuentro una ruta en bus razonable (¿origen o destino fuera de la red?).</li>'; return; }
+  if (!plans.length) { void walkOnly(from, d); return; }
   showPlan();
+}
+
+/** Sin tramo en bus que merezca la pena (destino cerca, o fuera de la red): ruta andando. */
+async function walkOnly(from: Pt, d: Dest) {
+  planToken++; const tok = planToken;
+  $('pseg').hidden = true; $('ptime').hidden = true; $('pwarn').hidden = true;
+  const straight = dist(from, d); let m = Math.round(straight * 1.3), sec = (m / 1.25); let geo: [number, number][] | null = null;
+  const pinta = () => {
+    const llega = cuando(Date.now() + sec * 1000);
+    $('smeta').innerHTML = `🚶 <b>Andando: ${fmtDur(sec / 60)}</b> (${fmtM(m)}) · llegas ${llega}`;
+    $('arr').innerHTML = `<div class="step"><span class="ic">🚶</span><div>Camina <b>${fmtDur(sec / 60)}</b> (${fmtM(m)}) hasta <b>${esc(d.name)}</b><small>${straight < 1200 ? 'Está cerca: no hace falta coger el bus.' : 'No hay un trayecto en bus que mejore ir andando desde aquí.'}</small></div></div>`;
+  };
+  pinta(); routeLayer.clearLayers();
+  const line = L.polyline([[from.lat, from.lon], [d.lat, d.lon]], { color: '#8e8e93', weight: 4, dashArray: '2 8' }).addTo(routeLayer);
+  L.circleMarker([d.lat, d.lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(routeLayer);
+  L.circleMarker([from.lat, from.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(routeLayer);
+  map.fitBounds(L.latLngBounds([[from.lat, from.lon], [d.lat, d.lon]]).pad(0.4), { paddingBottomRight: [0, window.innerHeight * 0.4] });
+  try {
+    const j = (await (await fetch(`/walk?a=${from.lat},${from.lon}&b=${d.lat},${d.lon}`)).json()) as { routes?: { distance: number; duration: number; geometry: { coordinates: [number, number][] } }[] };
+    const r = j.routes?.[0]; if (!r || tok !== planToken) return;
+    m = Math.round(r.distance); sec = r.duration; geo = r.geometry.coordinates.map(([lo, la]) => [la, lo] as [number, number]);
+    routeLayer.removeLayer(line); L.polyline(geo, { color: '#8e8e93', weight: 5, dashArray: '2 8' }).addTo(routeLayer); pinta();
+  } catch { /* se queda la estimación en línea recta */ }
 }
 
 function showPlan() {
