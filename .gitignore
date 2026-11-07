@@ -7,3 +7,9 @@ dist
 Captura*.png
 Captura*.jpg
 Screenshot*
+
+# imágenes sueltas en la raíz (capturas de pantalla); los iconos viven en public/
+/*.png
+/*.jpg
+/*.jpeg
+/*.heic

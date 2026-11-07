@@ -736,6 +736,7 @@ async function planTo(d: Dest) {
   toast('Calculando ruta…');
   const from = await origin();
   planFrom = from; planDest = d; plans = planAll(graph, from, d); planIdx = 0;
+  if (plans.length) await settlePlans(from, d);
   current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
   $('pseg').hidden = true; $('ptime').hidden = true;
@@ -766,6 +767,30 @@ async function walkOnly(from: Pt, d: Dest) {
   } catch { /* se queda la estimación en línea recta */ }
 }
 
+const firma = (p: Plan) => p.legs.map((l) => `${l.linea}:${l.stops[0].codigo}>${l.stops.at(-1)!.codigo}`).join('|');
+async function loadNext(p: Plan) {
+  if (p.nextBus !== undefined) return;
+  const first = p.legs[0];
+  try {
+    const j = (await (await fetch(`/tr/parada/${first.stops[0].codigo}`)).json()) as { llegadas: Llegada[] | null };
+    const n = j.llegadas?.find((l) => l.linea === first.linea && new Date(l.hora).getTime() > Date.now() - 20000);
+    p.nextBus = j.llegadas ? (n ? new Date(n.hora).getTime() : null) : undefined; p.nextBusLive = !!n?.enVivo;
+  } catch { /* sin datos: se queda la estimación por horario */ }
+}
+/** Comprueba si cada opción tiene bus de verdad; si alguna línea no circula, recalcula con las demás y ordena por hora de llegada. */
+async function settlePlans(from: Pt, d: Dest) {
+  await Promise.all(plans.map(loadNext));
+  const muertas = new Set(plans.filter(sinServicio).map((p) => p.legs[0].linea));
+  if (muertas.size) {
+    const g2 = buildGraph({ ...net, lineas: net.lineas.filter((l) => !muertas.has(l.codigo)) } as never);
+    const conocidas = new Set(plans.map(firma));
+    const extra = planAll(g2, from, d).filter((p) => !conocidas.has(firma(p)));
+    await Promise.all(extra.map(loadNext)); plans = [...plans, ...extra];
+  }
+  plans.sort((a, b) => { const x = arriveMs(a), y = arriveMs(b); return x === y ? 0 : x < y ? -1 : 1; });
+  planIdx = 0;
+}
+
 function showPlan() {
   const p = plans[planIdx]; routeLayer.clearLayers(); planToken++;
   renderPlanUI(); drawPlan(p, planFrom!, planDest!); renderPlan(p, planDest!); updateMeta();
@@ -773,7 +798,8 @@ function showPlan() {
 
 function renderPlanUI() {
   const seg = $('pseg'); seg.hidden = plans.length < 2;
-  seg.innerHTML = plans.map((p, i) => `<button data-i="${i}" class="${i === planIdx ? 'on' : ''}">${esc(profLabel(p.profile))}<small>${fmtDur(effMin(p))}</small></button>`).join('');
+  const repetidas = new Set(plans.map((p) => p.profile)).size < plans.length;
+  seg.innerHTML = plans.map((p, i) => `<button data-i="${i}" class="${i === planIdx ? 'on' : ''}">${esc(sinServicio(p) ? 'Línea ' + p.legs[0].linea : repetidas ? 'Opción ' + (i + 1) : profLabel(p.profile))}<small>${etiquetaMin(p)}</small></button>`).join('');
   seg.onclick = (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) { planIdx = +b.dataset.i!; showPlan(); } };
   $('ptime').hidden = false;
 }
@@ -785,14 +811,18 @@ const cuando = (ms: number) => { const d = new Date(ms), t = new Date(); const d
 function arriveMs(p: Plan): number {
   const now = Date.now(); const reach = now + (p.walkStart.m / 1.25) * 1000;
   const rest = (p.legs.reduce((a, l) => a + l.minutes, 0) * 60 + Math.max(0, p.buses - 1) * 300 + (p.walkM - p.walkStart.m) / 1.25) * 1000;
+  if (p.nextBus === null) return Infinity; // la línea no tiene ningún bus previsto en esa parada
   if (p.nextBus != null) return (p.nextBus >= reach ? p.nextBus : reach + 5 * 60e3) + rest;
   return now + p.minutes * 60000;
 }
+const sinServicio = (p: Plan) => p.nextBus === null;
+const etiquetaMin = (p: Plan) => (sinServicio(p) ? 'sin bus' : fmtDur(effMin(p)));
 const effMin = (p: Plan) => (p.nextBus != null ? Math.max(1, Math.round((arriveMs(p) - Date.now()) / 60000)) : p.minutes);
 
 function renderWarn(p: Plan) {
   const el = $('pwarn'); const now = Date.now(); const out: string[] = [];
   if (tmode === 'now') {
+    if (sinServicio(p)) out.push(`🚫 <b>No hay buses previstos de la línea ${esc(p.legs[0].linea)} en ${esc(p.legs[0].stops[0].nombre)}.</b><br>Puede que no circule hoy a esta hora.`);
     const sinBus = p.nextBus != null && p.nextBus - now > 90 * 60e3;
     if (sinBus) out.push(`🌙 <b>No hay buses de la línea ${esc(p.legs[0].linea)} hasta ${hasta(p.nextBus!)}.</b><br>Con ese bus llegarías ${cuando(arriveMs(p))}.`);
     if (p.walkAlone) {
@@ -805,16 +835,17 @@ function renderWarn(p: Plan) {
 
 function updateMeta() {
   const p = plans[planIdx]; if (!p) return; renderWarn(p);
-  const base = `${tmode === 'now' ? fmtDur(effMin(p)) : p.minutes + ' min'} · ${p.buses} bus${p.buses > 1 ? 'es' : ''}${p.buses > 1 ? ` · ${p.buses - 1} trasbordo${p.buses > 2 ? 's' : ''}` : ''} · ${fmtM(p.walkM)} a pie`;
+  const sinSvc = tmode === 'now' && sinServicio(p);
+  const base = `${sinSvc ? 'Sin buses previstos' : tmode === 'now' ? fmtDur(effMin(p)) : p.minutes + ' min'} · ${p.buses} bus${p.buses > 1 ? 'es' : ''}${p.buses > 1 ? ` · ${p.buses - 1} trasbordo${p.buses > 2 ? 's' : ''}` : ''} · ${fmtM(p.walkM)} a pie`;
   const wFaster = tmode === 'now' && !!p.walkAlone && Date.now() + p.walkAlone.s * 1000 < arriveMs(p);
-  let extra = wFaster ? `En bus llegas ${cuando(arriveMs(p))} · andando, ${cuando(Date.now() + p.walkAlone!.s * 1000)}` : `Llegas ${cuando(tmode === 'now' ? arriveMs(p) : Date.now() + p.minutes * 60000)}`;
+  let extra = sinSvc ? (p.walkAlone ? `Andando llegas ${cuando(Date.now() + p.walkAlone.s * 1000)}` : 'No hay horario de bus disponible') : wFaster ? `En bus llegas ${cuando(arriveMs(p))} · andando, ${cuando(Date.now() + p.walkAlone!.s * 1000)}` : `Llegas ${cuando(tmode === 'now' ? arriveMs(p) : Date.now() + p.minutes * 60000)}`;
   const [h, m] = (tval || '').split(':').map(Number);
   if (tmode !== 'now' && Number.isFinite(h)) {
     const t = new Date(); t.setHours(h, m, 0, 0); if (t.getTime() < Date.now() - 6 * 3600e3) t.setDate(t.getDate() + 1);
     extra = tmode === 'dep' ? `Sales a las ${HM(t)} · llegas sobre las ${HM(new Date(t.getTime() + p.minutes * 60000))}` : `Sal a las ${HM(new Date(t.getTime() - p.minutes * 60000))} para llegar a las ${HM(t)}`;
   }
   $('smeta').innerHTML = `${esc(base)}<br><b>${esc(extra)}</b>${tmode !== 'now' ? ' <i>(estimado por horario)</i>' : ' <i>· estimación</i>'}`;
-  document.querySelectorAll<HTMLElement>('#pseg button').forEach((b) => { const q = plans[+b.dataset.i!]; if (q) b.querySelector('small')!.textContent = fmtDur(effMin(q)); });
+  document.querySelectorAll<HTMLElement>('#pseg button').forEach((b) => { const q = plans[+b.dataset.i!]; if (q) b.querySelector('small')!.textContent = etiquetaMin(q); });
 }
 $('tmode').addEventListener('change', () => {
   tmode = ($('tmode') as HTMLSelectElement).value as typeof tmode; const t = $('tval') as HTMLInputElement; t.hidden = tmode === 'now';
@@ -877,7 +908,7 @@ function renderPlan(p: Plan, to: Dest) {
   const pintaBus = () => {
     const el = document.getElementById('rt0'); if (!el || tok !== planToken) return;
     if (p.nextBus === undefined) return;
-    if (p.nextBus === null) { el.textContent = 'Sin próximo bus previsto ahora mismo'; return; }
+    if (p.nextBus === null) { el.innerHTML = `<b class="rt" style="color:var(--red)">Sin buses previstos de esta línea</b>`; return; }
     const m = Math.round((p.nextBus - Date.now()) / 60000);
     el.innerHTML = m >= 90 ? `<b class="rt" style="color:var(--orange)">Sin buses hasta ${hasta(p.nextBus)}</b> (horario)` : `<b class="rt">Próximo bus: ${m} min</b> (${p.nextBusLive ? 'en directo' : 'horario'})`;
   };
