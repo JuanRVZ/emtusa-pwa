@@ -1,0 +1,27 @@
+name: Desplegar en Cloudflare Pages
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'public/**', 'functions/**', 'index.html', 'package.json', 'vite.config.ts']
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: ¿Hay credenciales de Cloudflare?
+        id: cred
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "Sin secretos de Cloudflare: se omite el despliegue (se puede desplegar a mano)."; fi
+      - uses: actions/checkout@v4
+        if: steps.cred.outputs.ok == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.cred.outputs.ok == 'true'
+        with: { node-version: 22, cache: npm }
+      - if: steps.cred.outputs.ok == 'true'
+        run: npm ci && npm run build
+      - if: steps.cred.outputs.ok == 'true'
+        run: npx wrangler pages deploy dist --project-name bus-huelva --branch main --commit-dirty=true

@@ -1,0 +1,26 @@
+name: Actualizar calles y sitios
+on:
+  schedule: [{ cron: '41 4 1 * *' }]   # el día 1 de cada mes, de madrugada
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Regenerar el índice desde OpenStreetMap
+        run: node scripts/build-calles.mjs
+      - name: Abrir PR si hay cambios
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          if git diff --quiet -- public/data/calles.json; then echo "Sin cambios."; exit 0; fi
+          B="data/sitios-$(date +%Y%m%d)"
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$B"; git add public/data/calles.json
+          git commit -m "Actualiza el índice de calles y sitios de Huelva"
+          git push origin "$B"
+          gh pr create --base main --head "$B" --title "Actualizar calles y sitios de Huelva" --body "Datos nuevos de OpenStreetMap (comercios, restaurantes, calles…). Revisa el tamaño del diff y fusiona; si el despliegue automático está configurado, se publica solo."

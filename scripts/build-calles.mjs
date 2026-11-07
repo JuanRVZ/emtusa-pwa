@@ -1,7 +1,7 @@
 // Genera public/data/calles.json: calles, plazas, barrios, lugares, comercios, restaurantes y servicios SOLO del municipio de Huelva.
 // Fuente: OpenStreetMap vía Overpass (con el límite administrativo oficial del municipio). Se ejecuta a mano cada pocos meses.
 // Formato: { k: [tipos], l: [etiquetas], d: [[nombre, tipo, lat, lon, etiqueta, dirección?], ...] }
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 
 const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const UA = { 'User-Agent': 'emtusa-pwa-personal/0.1 (índice de calles, uso puntual)', 'Content-Type': 'application/x-www-form-urlencoded' };
@@ -97,5 +97,16 @@ for (const it of items.values()) {
 }
 out.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'es'));
 const por = KINDS.map(() => 0); out.forEach((o) => por[o[1]]++);
-writeFileSync('public/data/calles.json', JSON.stringify({ generado: new Date().toISOString().slice(0, 10), fuente: 'OpenStreetMap (municipio de Huelva)', k: KINDS, l: labels, d: out }));
+const nuevo = { generado: new Date().toISOString().slice(0, 10), fuente: 'OpenStreetMap (municipio de Huelva)', k: KINDS, l: labels, d: out };
 console.log(KINDS.map((k, i) => `${k} ${por[i]}`).join(', '), `→ ${out.length} entradas, ${labels.length} etiquetas`);
+
+// Protecciones para la ejecución automática: no sustituir el índice por una respuesta incompleta de Overpass,
+// y no reescribir el archivo si no hay cambios reales (así los PR automáticos no se llenan de ruido).
+let previo = null;
+try { previo = JSON.parse(readFileSync('public/data/calles.json', 'utf8')); } catch { /* primera vez */ }
+if (previo) {
+  if (out.length < previo.d.length * 0.7) { console.error(`ABORTADO: ${out.length} entradas frente a ${previo.d.length} del índice actual (menos del 70 %). Overpass pudo devolver datos incompletos.`); process.exit(1); }
+  if (JSON.stringify({ ...previo, generado: 0 }) === JSON.stringify({ ...nuevo, generado: 0 })) { console.log('Sin cambios respecto al índice guardado.'); process.exit(0); }
+  console.log(`Cambios: ${previo.d.length} → ${out.length} entradas.`);
+}
+writeFileSync('public/data/calles.json', JSON.stringify(nuevo));
