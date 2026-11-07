@@ -75,7 +75,7 @@ const mins = (iso: string) => Math.max(0, Math.round((new Date(iso).getTime() - 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const destino = (r: Rec) => r.sentido.split('hacia')[1]?.trim() ?? r.sentido;
-const fmtDist = (m: number) => (m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1)} km`);
+const fmtDist = (m: number) => (m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
 
 // ============ Selector de líneas ============
 const chips = $('lines');
@@ -663,7 +663,12 @@ function buscarSitios(raw: string, max: number): Sitio[] {
   }
   return hits.sort((a, b) => a.sc - b.sc).slice(0, max).map((h) => h.s);
 }
-const sitioItem = (s: Sitio) => ({ t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: esc(s.lab ? `${s.lab}${s.addr ? ' · ' + s.addr : ''}` : `${KIND_NAME[s.k]} · Huelva`), go: () => planTo({ lat: s.lat, lon: s.lon, name: s.n }) });
+const sitioItem = (s: Sitio) => {
+  // dirección exacta si OSM la tiene; si no, la calle más cercana ("~" en el índice) para poder distinguir cadenas con varios locales
+  const dir = s.addr.startsWith('~') ? `cerca de ${s.addr.slice(1)}` : s.addr;
+  const lejos = userPos ? ` · a ${fmtDist(dist(userPos, s))}` : '';
+  return { t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: esc((s.lab ? `${s.lab}${dir ? ' · ' + dir : ''}` : `${KIND_NAME[s.k]} · Huelva`) + (s.k >= 3 ? lejos : '')), go: () => planTo({ lat: s.lat, lon: s.lon, name: s.addr && !s.addr.startsWith('~') ? `${s.n} (${s.addr})` : dir ? `${s.n} (${dir})` : s.n }) };
+};
 
 function showResults(items: { t: string; s: string; go: () => void }[]) {
   const ul = $('results'); ul.innerHTML = '';
@@ -673,7 +678,7 @@ function showResults(items: { t: string; s: string; go: () => void }[]) {
 function favsList() {
   showResults(net.paradas.filter((p) => favs.includes(p.codigo)).map((p) => ({ t: '★ ' + esc(p.nombre), s: p.lineas.join(' '), go: () => openStop(p) })));
 }
-$('q').addEventListener('focus', () => { if (!($('q') as HTMLInputElement).value && mode === 'search') favsList(); });
+$('q').addEventListener('focus', () => { if (geoOn) void updateUserPos(); if (!($('q') as HTMLInputElement).value && mode === 'search') favsList(); });
 $('q').addEventListener('input', (e) => {
   const raw = (e.target as HTMLInputElement).value.trim(); const q = norm(raw);
   if (mode === 'dest') return destSearch(raw);
@@ -688,7 +693,7 @@ $('q').addEventListener('input', (e) => {
 $('loc').onclick = () => {
   if (!navigator.geolocation) return toast('Sin geolocalización');
   navigator.geolocation.getCurrentPosition((pos) => {
-    const { latitude: la, longitude: lo } = pos.coords;
+    const { latitude: la, longitude: lo } = pos.coords; userPos = { lat: la, lon: lo };
     const d = (p: Parada) => map.distance([la, lo], [p.lat, p.lon]);
     const pool = sel ? sel.route.stops : net.paradas;
     const near = [...pool].sort((a, b) => d(a) - d(b)).slice(0, 8);

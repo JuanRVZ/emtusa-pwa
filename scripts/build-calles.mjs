@@ -71,6 +71,7 @@ function clasifica(t) {
   return null;
 }
 
+const calles = []; // { name, pts } de todas las calles, para calcular la más cercana a cada sitio
 const items = new Map();   // calles/plazas agrupadas por nombre; el resto, un elemento por sitio
 const add = (key, name, kind, label, pts, addr) => { const it = items.get(key) ?? { name, kind, label, pts: [], addr }; it.pts.push(...pts); if (!it.addr && addr) it.addr = addr; items.set(key, it); };
 
@@ -80,6 +81,7 @@ for (const e of data.elements) {
   if (e.type === 'way' && e.geometry && t.highway) {
     const kind = /^(plaza|plazoleta|glorieta|plazuela)\b/i.test(name) ? 'plaza' : 'calle';
     add(`${kind}|${norm(name)}`, name, kind, '', e.geometry.map((g) => [g.lat, g.lon]));
+    calles.push({ name, pts: e.geometry.map((g) => [g.lat, g.lon]) });
     continue;
   }
   const c = e.center ?? (e.lat != null ? { lat: e.lat, lon: e.lon } : null); if (!c) continue;
@@ -90,6 +92,25 @@ for (const e of data.elements) {
   add(`${cl[1]}|${norm(name)}|${cl[0]}|${c.lat.toFixed(3)}|${c.lon.toFixed(3)}`, name, cl[1], cl[0], [[c.lat, c.lon]], addr);
 }
 
+// Índice espacial de tramos de calle (celdas de ~200 m) y búsqueda de la calle más cercana a un punto.
+const CELDA = 0.002, key = (la, lo) => `${Math.floor(la / CELDA)},${Math.floor(lo / CELDA)}`;
+const rejilla = new Map();
+for (const c of calles) for (let i = 0; i + 1 < c.pts.length; i++) {
+  const a = c.pts[i], b = c.pts[i + 1]; const seg = { name: c.name, a, b };
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) / CELDA));
+  for (let k = 0; k <= n; k++) { const kk = key(a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n); const l = rejilla.get(kk) ?? []; if (l[l.length - 1] !== seg) l.push(seg); rejilla.set(kk, l); }
+}
+function calleCercana(la, lo, max = 150) {
+  const ky = 111320, kx = 111320 * Math.cos((la * Math.PI) / 180); let best = null, bd = max;
+  const ci = Math.floor(la / CELDA), cj = Math.floor(lo / CELDA);
+  for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const sg of rejilla.get(`${ci + di},${cj + dj}`) ?? []) {
+    const ax = (sg.a[1] - lo) * kx, ay = (sg.a[0] - la) * ky, bx = (sg.b[1] - lo) * kx, by = (sg.b[0] - la) * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy; const t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+    const d = Math.hypot(ax + t * dx, ay + t * dy); if (d < bd) { bd = d; best = sg.name; }
+  }
+  return best;
+}
+
 // un punto por sitio: el nodo más cercano al centro (así cae sobre la propia calle aunque sea curva o larga)
 const labels = []; const lab = (l) => { if (!l) return -1; let i = labels.indexOf(l); if (i < 0) { i = labels.length; labels.push(l); } return i; };
 const out = [];
@@ -97,7 +118,9 @@ for (const it of items.values()) {
   const la = it.pts.reduce((a, p) => a + p[0], 0) / it.pts.length, lo = it.pts.reduce((a, p) => a + p[1], 0) / it.pts.length;
   let best = it.pts[0], bd = Infinity;
   for (const p of it.pts) { const d = (p[0] - la) ** 2 + ((p[1] - lo) * 0.8) ** 2; if (d < bd) { bd = d; best = p; } }
-  const row = [it.name, K[it.kind], +best[0].toFixed(5), +best[1].toFixed(5), lab(it.label)]; if (it.addr) row.push(it.addr);
+  let dir = it.addr;
+  if (!dir && K[it.kind] >= 3) { const c = calleCercana(best[0], best[1]); if (c) dir = '~' + c; } // "~" = aproximada: calle más cercana, no la dirección exacta
+  const row = [it.name, K[it.kind], +best[0].toFixed(5), +best[1].toFixed(5), lab(it.label)]; if (dir) row.push(dir);
   out.push(row);
 }
 out.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'es'));
