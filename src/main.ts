@@ -95,6 +95,7 @@ let mineSeg: L.Polyline | null = null;
 let mineMarker: L.Marker | null = null;
 let stopMarkers: L.CircleMarker[] = [];
 let refreshTimer: number | undefined;
+let scrollBusPend = false; // al elegir línea o sentido: llevar la lista hasta el bus en cuanto lleguen sus posiciones
 
 function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   alClose();
@@ -114,7 +115,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   (document.querySelector(`.chip[data-l="${CSS.escape(code)}"]`) as HTMLElement | null)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   drawLine(true);
   $('lsheet').hidden = false; setDetent(1);
-  arrivals = new Map(); tracked = [];
+  arrivals = new Map(); tracked = []; scrollBusPend = true;
   renderPanel(); refreshLive();
   clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, REFRESH);
   if (sel.mine) setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; }, 80);
@@ -155,6 +156,7 @@ function paintMinutes() {
 }
 
 function setDir(d: number) {
+  scrollBusPend = true;
   alClose();
   if (!sel || d === sel.dir) return;
   const linea = sel.linea; const route = new Route(linea.recorridos[d], byCode);
@@ -209,6 +211,7 @@ async function refreshLive() {
   if (buses) ingestBuses(buses);
   if (llg) { arrivals = new Map(); for (const a of llg) { const l = arrivals.get(a.parada) ?? []; l.push(a); arrivals.set(a.parada, l); } }
   renderPanel(); updateMine(); paintMinutes(); updateUserPos();
+  if (scrollBusPend) { scrollBusPend = false; setTimeout(scrollToBus, 150); }
 }
 
 function newTracked(s: number): Tracked {
@@ -297,11 +300,26 @@ function renderPanel() {
     const et = e ? `<span class="et ${e.src}">${e.txt}</span>` : '<span class="et none">—</span>';
     rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}" style="--c:${linea.color}" role="button" tabindex="0" aria-pressed="${sel!.mine === p.codigo}" aria-label="${esc(p.nombre)}${e ? ', ' + (e.src === 'plan' ? 'horario ' + e.txt : e.txt.replace('~', 'aproximadamente ').replace(' min', ' minutos')) : ''}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
-      rows.push(`<li class="brow" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
+      rows.push(`<li class="brow" data-s="${Math.round(t.sNow)}" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
   });
   list.innerHTML = rows.join(''); $('lbody').scrollTop = keep;
   list.onclick = (e) => { const li = (e.target as HTMLElement).closest('.srow') as HTMLElement | null; if (li) setMine(li.dataset.c!); };
   $('mine').hidden = !sel.mine; updateMine();
+}
+
+/** Lleva la lista de paradas hasta el bus (el más cercano a ti o al centro del mapa; con parada marcada, el que viene hacia ella). */
+function scrollToBus() {
+  if (!sel) return;
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('#slist .brow')); if (!rows.length) return;
+  let target = rows[0];
+  if (sel.mine) {
+    const a = approaching();
+    const r = a && rows.find((x) => Math.abs(+x.dataset.s! - a.t.sNow) < 60); if (r) target = r;
+  } else {
+    const ref = userPos ?? { lat: map.getCenter().lat, lon: map.getCenter().lng }; let best = Infinity;
+    for (const r of rows) { const [la, lo] = sel.route.at(+r.dataset.s!); const d = dist(ref, { lat: la, lon: lo }); if (d < best) { best = d; target = r; } }
+  }
+  target.scrollIntoView({ block: sel.mine ? 'nearest' : 'center', behavior: 'smooth' });
 }
 
 function scrollToMine() { document.querySelector('#slist .srow.mine')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
