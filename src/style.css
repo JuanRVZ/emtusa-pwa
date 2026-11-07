@@ -79,7 +79,7 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 @media (prefers-color-scheme: dark) { #seg button.on { background:#636366; } }
 
 /* tarjeta "mi parada" */
-#mine { flex:none; position:relative; overflow:hidden; border-radius:20px; padding:12px 14px 12px; margin-bottom:8px; color:#fff; background:linear-gradient(145deg,#0a84ff 0%,#5e5ce6 100%); box-shadow:0 6px 18px rgba(10,132,255,.35); animation:pop .3s cubic-bezier(.2,.9,.3,1.2); }
+#mine { list-style:none; flex:none; position:relative; border-radius:20px; padding:12px 14px 12px; margin:4px 0 8px 34px; color:#fff; background:linear-gradient(145deg,#0a84ff 0%,#5e5ce6 100%); box-shadow:0 6px 18px rgba(10,132,255,.35); animation:pop .3s cubic-bezier(.2,.9,.3,1.2); }
 #mine[hidden] { display:none; }
 .mtop { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
 .mtop small { display:block; opacity:.8; font-size:11px; font-weight:600; letter-spacing:.08em; }
@@ -95,9 +95,9 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 #slist { flex:1; min-height:0; margin:0 -16px; padding:0 16px; list-style:none; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .srow, .brow { position:relative; padding-left:34px; }
 .srow::before, .brow::before { content:""; position:absolute; left:10px; top:0; bottom:0; width:4px; border-radius:2px; background:var(--c); opacity:.85; }
-.srow:first-child::before { top:50%; } .srow:last-child::before { bottom:50%; }
+.srow.first::before { top:50%; } .srow.last::before { bottom:50%; }
 .srow { display:flex; align-items:center; gap:10px; min-height:50px; padding-top:7px; padding-bottom:7px; padding-right:2px; cursor:pointer; }
-.srow:not(:last-child)::after { content:""; position:absolute; left:34px; right:0; bottom:0; height:.5px; background:var(--sep); }
+.srow:not(.last)::after { content:""; position:absolute; left:34px; right:0; bottom:0; height:.5px; background:var(--sep); }
 .srow:active { background:var(--fill); border-radius:12px; }
 .srow .dot { position:absolute; left:5px; top:50%; transform:translateY(-50%); width:14px; height:14px; border-radius:50%; background:var(--solid); border:3.5px solid var(--c); box-sizing:border-box; z-index:1; }
 .srow.mine { background:color-mix(in srgb, var(--blue) 14%, transparent); border-radius:14px; }
@@ -203,7 +203,7 @@ input { font-family:inherit; -webkit-user-select:text; user-select:text; }
 /* accesibilidad */
 :focus-visible { outline:3px solid var(--blue); outline-offset:2px; border-radius:8px; }
 button:focus:not(:focus-visible), .srow:focus:not(:focus-visible) { outline:none; }
-#slist, #mine, #lhead, #seg, #arr, #pseg, #ptime, .head, .quick, .flist, .aviso, .sec, .hint { zoom:var(--k, 1); }
+#slist, #lhead, #seg, #arr, #pseg, #ptime, .head, .quick, .flist, .aviso, .sec, .hint { zoom:var(--k, 1); }
 @media (prefers-contrast: more) { :root { --sep:rgba(0,0,0,.5); --mut:rgba(0,0,0,.75); } .chip, .badge { outline:2px solid #fff; } }
 @media (prefers-color-scheme: dark) and (prefers-contrast: more) { :root { --sep:rgba(255,255,255,.6); --mut:rgba(255,255,255,.85); } }
 
@@ -265,3 +265,12 @@ html, body { height:100%; min-height:100dvh; }
 #pick .pickbar b { display:block; font-size:18px; } #pick .pickbar small { display:block; color:var(--mut); margin:2px 0 12px; }
 .pickbtns { display:flex; gap:10px; } .pb { flex:1; padding:13px; border:0; border-radius:14px; background:var(--fill); color:var(--fg); font:600 16px var(--font); } .pb.ok { background:var(--blue); color:#fff; }
 body.picking .sheet, body.picking #lines, body.picking #alarm, body.picking #bar, body.picking #results { display:none !important; }
+
+/* tarjeta "Mi parada" dentro de la lista, debajo de la parada marcada */
+#mine::before { content:""; position:absolute; left:-24px; top:-8px; bottom:-8px; width:4px; border-radius:2px; background:var(--c); opacity:.85; } /* continúa la línea de tiempo */
+.srow.last.mine + #mine::before { display:none; }
+#slist { padding-bottom:14px; } /* espacio para que la tarjeta de la última parada se vea entera */
+
+.macts button { width:26px; height:26px; padding:0; border:0; border-radius:50%; background:rgba(255,255,255,.25); color:#fff; font-size:16px; font-weight:700; line-height:1; }
+.macts button:disabled { opacity:.3; }
+#mprev, #mnext { font-size:20px; padding-bottom:2px; }

@@ -121,7 +121,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   arrivals = new Map(); tracked = []; scrollBusPend = true;
   renderPanel(); refreshLive();
   clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, POLL);
-  if (sel.mine) setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; }, 80);
+  if (sel.mine) { setTimeout(() => { fitSheet(); scrollToMine(); }, 80); setTimeout(scrollToMine, 420); }
 }
 
 function clearLine() {
@@ -178,12 +178,36 @@ function fitSheet() {
   setDetent(Math.max(i < 0 ? DETENTS.length - 1 : i, detent));
 }
 
-function setMine(code: string) {
+/** Posición en pantalla (px) de la fila de una parada dentro de la lista, o null si no existe. */
+const topFila = (code: string) => document.querySelector<HTMLElement>(`#slist .srow[data-c="${CSS.escape(code)}"]`)?.getBoundingClientRect().top ?? null;
+/** Asegura que la tarjeta "Mi parada" se vea entera (también cuando la parada está al final de la lista). */
+function keepCardVisible() {
+  const card = $('mine'); const body = $('lbody'); if (card.hidden) return;
+  const c = card.getBoundingClientRect(), b = body.getBoundingClientRect();
+  if (c.height > b.height) body.scrollTop += c.top - b.top - 4;            // no cabe: se alinea su borde superior
+  else if (c.bottom > b.bottom) body.scrollTop += c.bottom - b.bottom + 8; // asoma por abajo
+  else if (c.top < b.top) body.scrollTop -= b.top - c.top + 8;              // asoma por arriba
+}
+
+function setMine(code: string, ancla: 'fila' | 'tarjeta' = 'fila') {
   if (!sel) return;
+  // ancla "fila": la parada tocada no se mueve en pantalla; ancla "tarjeta" (botones ‹ ›): la tarjeta se queda donde está para poder pulsar › otra vez
+  const posAncla = () => (ancla === 'tarjeta' ? ($('mine').hidden ? null : $('mine').getBoundingClientRect().top) : topFila(code));
+  const antes = posAncla();
   sel.mine = code;
   mineStore[sel.linea.codigo] = { dir: sel.dir, code }; localStorage.setItem('mine', JSON.stringify(mineStore));
   updateMineMarker(); renderPanel(); updateMine();
-  setTimeout(() => { fitSheet(); $('lbody').scrollTop = 0; const p = byCode.get(code)!; focusAbove([p.lat, p.lon]); }, 60); // la tarjeta queda siempre visible arriba
+  const despues = posAncla();
+  if (antes !== null && despues !== null) $('lbody').scrollTop += despues - antes;
+  setTimeout(() => { fitSheet(); keepCardVisible(); const p = byCode.get(code)!; focusAbove([p.lat, p.lon]); }, 60);
+  setTimeout(keepCardVisible, 400); // por si la hoja cambió de altura (transición de 0,3 s)
+}
+/** Pasa a la parada anterior (−1) o siguiente (+1) del recorrido. */
+function stepMine(d: number) {
+  if (!sel?.mine) return;
+  const i = sel.route.stops.findIndex((x) => x.codigo === sel!.mine), j = i + d;
+  if (i < 0 || j < 0 || j >= sel.route.stops.length) return;
+  setMine(sel.route.stops[j].codigo, 'tarjeta');
 }
 
 function focusAbove(ll: [number, number]) {
@@ -308,17 +332,21 @@ function renderPanel() {
   const st = $('lstat'); st.textContent = !liveOk ? 'Sin datos en directo' : tracked.length ? `${tracked.length} bus${tracked.length === 1 ? '' : 'es'} en circulación en este sentido` : 'Ningún bus en este sentido ahora'; st.classList.toggle('on', liveOk && tracked.length > 0);
 
   const list = $('slist'); const keep = $('lbody').scrollTop;
+  const mineEl = $('mine'); mineEl.remove(); // la lista se repinta entera: la tarjeta se vuelve a colocar debajo de la parada marcada
+  mineEl.style.setProperty('--c', linea.color);
   const rows: string[] = [];
   route.stops.forEach((p, i) => {
     const e = etaFor(i);
     const et = e ? `<span class="et ${e.src}">${e.txt}</span>` : '<span class="et none">—</span>';
-    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}" data-c="${p.codigo}" style="--c:${linea.color}" role="button" tabindex="0" aria-pressed="${sel!.mine === p.codigo}" aria-label="${esc(p.nombre)}${e ? ', ' + (e.src === 'plan' ? 'horario ' + e.txt : e.txt.replace('~', 'aproximadamente ').replace(' min', ' minutos')) : ''}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
+    rows.push(`<li class="srow ${sel!.mine === p.codigo ? 'mine' : ''}${i === 0 ? ' first' : ''}${i === route.stops.length - 1 ? ' last' : ''}" data-c="${p.codigo}" style="--c:${linea.color}" role="button" tabindex="0" aria-pressed="${sel!.mine === p.codigo}" aria-label="${esc(p.nombre)}${e ? ', ' + (e.src === 'plan' ? 'horario ' + e.txt : e.txt.replace('~', 'aproximadamente ').replace(' min', ' minutos')) : ''}"><i class="dot"></i><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span>${et}</li>`);
     if (i + 1 < route.stops.length) for (const t of tracked) if (t.sNow >= route.stopPos[i] && t.sNow < route.stopPos[i + 1])
       rows.push(`<li class="brow" data-s="${Math.round(t.sNow)}" style="--c:${linea.color}"><i class="bdot"></i><span>Bus a ${fmtDist(route.stopPos[i + 1] - t.sNow)} de <b>${esc(route.stops[i + 1].nombre)}</b></span></li>`);
   });
-  list.innerHTML = rows.join(''); $('lbody').scrollTop = keep;
+  list.innerHTML = rows.join('');
+  const filaMine = list.querySelector('.srow.mine'); if (filaMine) filaMine.after(mineEl); else list.prepend(mineEl);
+  $('lbody').scrollTop = keep;
   list.onclick = (e) => { const li = (e.target as HTMLElement).closest('.srow') as HTMLElement | null; if (li) setMine(li.dataset.c!); };
-  $('mine').hidden = !sel.mine; updateMine();
+  mineEl.hidden = !sel.mine; updateMine();
 }
 
 /** Lleva la lista de paradas hasta el bus (el más cercano a ti o al centro del mapa; con parada marcada, el que viene hacia ella). */
@@ -336,7 +364,10 @@ function scrollToBus() {
   target.scrollIntoView({ block: sel.mine ? 'nearest' : 'center', behavior: 'smooth' });
 }
 
-function scrollToMine() { document.querySelector('#slist .srow.mine')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+function scrollToMine() { // lleva la parada marcada arriba de la lista, con su tarjeta debajo
+  const r = document.querySelector<HTMLElement>('#slist .srow.mine'); if (!r) return; const body = $('lbody');
+  body.scrollTop += r.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; keepCardVisible();
+}
 
 // ---------- ¿Llego a tiempo? (ubicación del usuario) ----------
 let userPos: Pt | null = null; let geoOn = false;
@@ -432,6 +463,7 @@ function updateMine() {
   const box = $('mine'); if (!sel?.mine) { box.hidden = true; return; }
   const ae = document.activeElement as HTMLElement | null; if (ae && box.contains(ae) && /^(SELECT|INPUT)$/.test(ae.tagName)) return; // no pisar lo que el usuario está editando
   const p = byCode.get(sel.mine)!; const arr = arrivals.get(p.codigo) ?? [];
+  const ix = sel.route.stops.findIndex((x) => x.codigo === p.codigo);
   const next = arr[0]; const a = approaching();
   let where = 'Ningún bus de camino ahora mismo';
   if (a) where = a.remain < 60 ? '🚌 ¡Llegando!' : `🚌 A ${a.away} parada${a.away === 1 ? '' : 's'} · ${fmtDist(a.remain)}`;
@@ -444,11 +476,11 @@ function updateMine() {
   const sub = useEst ? 'estimado por la posición del bus' + (next ? ` · siguiente oficial ${hhmm(next.hora)}` : '')
     : next ? `${hhmm(next.hora)} · ${next.enVivo ? '<b class="rt">en directo</b>' : 'según horario'}${arr[1] ? ` · luego ${etaTxt(arr[1].hora)}` : ''}` : 'Sin llegadas previstas';
   box.hidden = false;
-  box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
+  box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mprev" aria-label="Parada anterior" ${ix <= 0 ? 'disabled' : ''}>‹</button><button id="mnext" aria-label="Parada siguiente" ${ix >= sel.route.stops.length - 1 ? 'disabled' : ''}>›</button><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
     ${leaveHtml(p, sel.route.stops.findIndex((x) => x.codigo === p.codigo), arr)}
     <button class="moptsb" data-act="alopen">🔔 Alarmas y avisos${alActive() ? ' · <b>activa</b>' : ''} <span>›</span></button>`;
-  $('mclear').onclick = clearMine;
+  $('mclear').onclick = clearMine; $('mprev').onclick = () => stepMine(-1); $('mnext').onclick = () => stepMine(1);
   $('mshare').onclick = async () => {
     const url = `${location.origin}/?l=${encodeURIComponent(sel!.linea.codigo)}&d=${sel!.dir}&p=${p.codigo}`;
     const text = `Línea ${sel!.linea.codigo} en ${p.nombre}`;
