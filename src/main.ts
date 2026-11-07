@@ -631,26 +631,39 @@ $('close').onclick = closeStopSheet;
 $('fav').onclick = () => { if (!current) return; const c = current.codigo; favs = favs.includes(c) ? favs.filter((x) => x !== c) : [...favs, c]; localStorage.setItem('favs', JSON.stringify(favs)); paintFav(); };
 
 // ---- Calles, plazas, barrios y lugares: índice propio, solo del municipio de Huelva (sin enviar nada a terceros) ----
-type Sitio = { n: string; k: number; lat: number; lon: number; tw: string[] };
-const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar'];
+type Sitio = { n: string; k: number; lat: number; lon: number; tw: string[]; lw: string[]; lab: string; addr: string };
+const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍', '🛍️', '🍽️', '🏢']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar', 'Comercio', 'Restaurante o bar', 'Servicio'];
 const SKIP = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'en']);
-const ABBR: Record<string, string> = { av: 'avenida', avda: 'avenida', avd: 'avenida', c: 'calle', cl: 'calle', pza: 'plaza', plza: 'plaza', pl: 'plaza', pso: 'paseo', ps: 'paseo', ctra: 'carretera', gta: 'glorieta', glta: 'glorieta', bda: 'barriada', urb: 'urbanizacion', hosp: 'hospital', sta: 'santa', sto: 'santo' };
+const ABBR: Record<string, string> = { av: 'avenida', avda: 'avenida', avd: 'avenida', c: 'calle', cl: 'calle', pza: 'plaza', plza: 'plaza', pl: 'plaza', pso: 'paseo', ps: 'paseo', ctra: 'carretera', gta: 'glorieta', glta: 'glorieta', bda: 'barriada', urb: 'urbanizacion', hosp: 'hospital', sta: 'santa', sto: 'santo', rest: 'restaurante', super: 'supermercado', farm: 'farmacia' };
 const tokens = (t: string) => norm(t).replace(/[.,/()'"-]/g, ' ').split(/\s+/).filter(Boolean).map((w) => ABBR[w] ?? w).filter((w) => !SKIP.has(w));
+const empieza = (w: string, t: string) => w.startsWith(t) || (t.length > 3 && t.endsWith('s') && w.startsWith(t.slice(0, -1))); // "restaurantes" encuentra "restaurante"
 let sitios: Sitio[] = [];
-fetch('/data/calles.json').then((r) => r.json()).then((j: { d: [string, number, number, number][] }) => { sitios = j.d.map(([n, k, lat, lon]) => ({ n, k, lat, lon, tw: tokens(n) })); }).catch(() => { /* sin índice: solo paradas y líneas */ });
+fetch('/data/calles.json').then((r) => r.json()).then((j: { l: string[]; d: [string, number, number, number, number, string?][] }) => {
+  sitios = j.d.map(([n, k, lat, lon, li, addr]) => ({ n, k, lat, lon, tw: tokens(n), lab: li >= 0 ? j.l[li] : '', lw: li >= 0 ? tokens(j.l[li]) : [], addr: addr ?? '' }));
+}).catch(() => { /* sin índice: solo paradas y líneas */ });
+/** Busca por nombre o por tipo ("farmacia"); entre varios iguales (p. ej. un Mercadona) salen primero los más cercanos al usuario o al centro del mapa. */
 function buscarSitios(raw: string, max: number): Sitio[] {
+  if (raw.trim().length < 2) return []; // una sola letra o cifra daría resultados sin sentido
   const q = tokens(raw); if (!q.length) return [];
+  const ref = userPos ?? { lat: map.getCenter().lat, lon: map.getCenter().lng };
   const hits: { s: Sitio; sc: number }[] = [];
   for (const s of sitios) {
     const used = new Set<number>(); let ok = true; let sc = 0;
-    for (const t of q) { const i = s.tw.findIndex((w, idx) => !used.has(idx) && w.startsWith(t)); if (i < 0) { ok = false; break; } used.add(i); sc += s.tw[i] === t ? 0 : 1; }
+    for (const t of q) {
+      const i = s.tw.findIndex((w, idx) => !used.has(idx) && empieza(w, t));
+      if (i >= 0) { used.add(i); sc += s.tw[i] === t ? 0 : 1; continue; }
+      if (s.lw.some((w) => empieza(w, t))) { sc += 4; continue; } // coincide por el tipo de sitio
+      ok = false; break;
+    }
     if (!ok) continue;
-    sc += s.tw.indexOf(s.tw[[...used][0]]) * 2 + (s.tw[0] === q[0] ? 0 : 3) + s.k * 0.5 + s.tw.length * 0.1; // mejor si coincide al principio y es calle
+    const first = used.size ? Math.min(...used) : 3;
+    sc += first * 2 + (s.tw[0] === q[0] ? 0 : 3) + s.k * 0.4 + s.tw.length * 0.1;
+    if (s.k >= 3) sc += (dist(ref, s) / 1000) * 0.2; // más cerca, mejor
     hits.push({ s, sc });
   }
   return hits.sort((a, b) => a.sc - b.sc).slice(0, max).map((h) => h.s);
 }
-const sitioItem = (s: Sitio) => ({ t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: `${KIND_NAME[s.k]} · Huelva`, go: () => planTo({ lat: s.lat, lon: s.lon, name: s.n }) });
+const sitioItem = (s: Sitio) => ({ t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: esc(s.lab ? `${s.lab}${s.addr ? ' · ' + s.addr : ''}` : `${KIND_NAME[s.k]} · Huelva`), go: () => planTo({ lat: s.lat, lon: s.lon, name: s.n }) });
 
 function showResults(items: { t: string; s: string; go: () => void }[]) {
   const ul = $('results'); ul.innerHTML = '';
@@ -669,7 +682,7 @@ $('q').addEventListener('input', (e) => {
     t: `Línea ${esc(l.codigo)}`, s: esc(l.nombre), go: () => { $('results').hidden = true; selectLine(l.codigo); },
   }));
   const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
-  showResults([...ls, ...buscarSitios(raw, 6).map(sitioItem), ...ps]);
+  showResults([...ls, ...buscarSitios(raw, 8).map(sitioItem), ...ps]);
 });
 
 $('loc').onclick = () => {
@@ -689,7 +702,7 @@ $('loc').onclick = () => {
 type Dest = Pt & { name: string };
 function destSearch(raw: string) {
   if (!raw.trim()) return showResults([]);
-  const hits = buscarSitios(raw, 10);
+  const hits = buscarSitios(raw, 12);
   if (hits.length) return showResults(hits.map(sitioItem));
   // sin calles con ese nombre: paradas de bus de la zona (por si es un barrio que no figura como tal en el mapa)
   const q = norm(raw);
@@ -737,22 +750,48 @@ function showPlan() {
 
 function renderPlanUI() {
   const seg = $('pseg'); seg.hidden = plans.length < 2;
-  seg.innerHTML = plans.map((p, i) => `<button data-i="${i}" class="${i === planIdx ? 'on' : ''}">${esc(profLabel(p.profile))}<small>${p.minutes} min</small></button>`).join('');
+  seg.innerHTML = plans.map((p, i) => `<button data-i="${i}" class="${i === planIdx ? 'on' : ''}">${esc(profLabel(p.profile))}<small>${fmtDur(effMin(p))}</small></button>`).join('');
   seg.onclick = (e) => { const b = (e.target as HTMLElement).closest('button'); if (b) { planIdx = +b.dataset.i!; showPlan(); } };
   $('ptime').hidden = false;
 }
 
+const fmtDur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} h ${Math.round(min % 60)} min` : `${Math.max(1, Math.round(min))} min`);
+const hasta = (ms: number) => cuando(ms).replace(/^a las /, 'las ').replace(/ a las /, ' a las ');
+const cuando = (ms: number) => { const d = new Date(ms), t = new Date(); const dia = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime()) / 864e5); return `${dia === 1 ? 'mañana a las ' : dia > 1 ? d.toLocaleDateString('es-ES', { weekday: 'long' }) + ' a las ' : 'a las '}${HM(d)}`; };
+/** Llegada estimada (ms) usando la hora REAL del próximo bus en la primera parada (si se conoce). */
+function arriveMs(p: Plan): number {
+  const now = Date.now(); const reach = now + (p.walkStart.m / 1.25) * 1000;
+  const rest = (p.legs.reduce((a, l) => a + l.minutes, 0) * 60 + Math.max(0, p.buses - 1) * 300 + (p.walkM - p.walkStart.m) / 1.25) * 1000;
+  if (p.nextBus != null) return (p.nextBus >= reach ? p.nextBus : reach + 5 * 60e3) + rest;
+  return now + p.minutes * 60000;
+}
+const effMin = (p: Plan) => (p.nextBus != null ? Math.max(1, Math.round((arriveMs(p) - Date.now()) / 60000)) : p.minutes);
+
+function renderWarn(p: Plan) {
+  const el = $('pwarn'); const now = Date.now(); const out: string[] = [];
+  if (tmode === 'now') {
+    const sinBus = p.nextBus != null && p.nextBus - now > 90 * 60e3;
+    if (sinBus) out.push(`🌙 <b>No hay buses de la línea ${esc(p.legs[0].linea)} hasta ${hasta(p.nextBus!)}.</b><br>Con ese bus llegarías ${cuando(arriveMs(p))}.`);
+    if (p.walkAlone) {
+      const wArr = now + p.walkAlone.s * 1000;
+      out.push(`🚶 <b>Andando:</b> ${fmtDur(p.walkAlone.s / 60)} (${fmtM(p.walkAlone.m)}) · llegarías ${cuando(wArr)}${wArr < arriveMs(p) ? `<br>✅ <b>Te conviene ir andando</b>${sinBus ? '' : ' (llegas antes que en bus)'}.` : ''}`);
+    }
+  }
+  el.innerHTML = out.map((t) => `<p>${t}</p>`).join(''); el.hidden = out.length === 0;
+}
+
 function updateMeta() {
-  const p = plans[planIdx]; if (!p) return;
-  const base = `${p.minutes} min · ${p.buses} bus${p.buses > 1 ? 'es' : ''}${p.buses > 1 ? ` · ${p.buses - 1} trasbordo${p.buses > 2 ? 's' : ''}` : ''} · ${fmtM(p.walkM)} a pie`;
-  let extra = `Llegas sobre las ${HM(new Date(Date.now() + p.minutes * 60000))}`;
+  const p = plans[planIdx]; if (!p) return; renderWarn(p);
+  const base = `${tmode === 'now' ? fmtDur(effMin(p)) : p.minutes + ' min'} · ${p.buses} bus${p.buses > 1 ? 'es' : ''}${p.buses > 1 ? ` · ${p.buses - 1} trasbordo${p.buses > 2 ? 's' : ''}` : ''} · ${fmtM(p.walkM)} a pie`;
+  const wFaster = tmode === 'now' && !!p.walkAlone && Date.now() + p.walkAlone.s * 1000 < arriveMs(p);
+  let extra = wFaster ? `En bus llegas ${cuando(arriveMs(p))} · andando, ${cuando(Date.now() + p.walkAlone!.s * 1000)}` : `Llegas ${cuando(tmode === 'now' ? arriveMs(p) : Date.now() + p.minutes * 60000)}`;
   const [h, m] = (tval || '').split(':').map(Number);
   if (tmode !== 'now' && Number.isFinite(h)) {
     const t = new Date(); t.setHours(h, m, 0, 0); if (t.getTime() < Date.now() - 6 * 3600e3) t.setDate(t.getDate() + 1);
     extra = tmode === 'dep' ? `Sales a las ${HM(t)} · llegas sobre las ${HM(new Date(t.getTime() + p.minutes * 60000))}` : `Sal a las ${HM(new Date(t.getTime() - p.minutes * 60000))} para llegar a las ${HM(t)}`;
   }
   $('smeta').innerHTML = `${esc(base)}<br><b>${esc(extra)}</b>${tmode !== 'now' ? ' <i>(estimado por horario)</i>' : ' <i>· estimación</i>'}`;
-  document.querySelectorAll<HTMLElement>('#pseg button').forEach((b) => { const q = plans[+b.dataset.i!]; if (q) b.querySelector('small')!.textContent = `${q.minutes} min`; });
+  document.querySelectorAll<HTMLElement>('#pseg button').forEach((b) => { const q = plans[+b.dataset.i!]; if (q) b.querySelector('small')!.textContent = fmtDur(effMin(q)); });
 }
 $('tmode').addEventListener('change', () => {
   tmode = ($('tmode') as HTMLSelectElement).value as typeof tmode; const t = $('tval') as HTMLInputElement; t.hidden = tmode === 'now';
@@ -812,11 +851,25 @@ function renderPlan(p: Plan, to: Dest) {
   $('arr').innerHTML = rows.join('');
   $('arr').querySelectorAll<HTMLElement>('.follow').forEach((b) => b.onclick = () => selectLine(b.dataset.l!, { stop: b.dataset.s }));
   const first = p.legs[0]; const tok = planToken;
-  fetch(`/tr/parada/${first.stops[0].codigo}`).then((r) => r.json()).then(({ llegadas }: { llegadas: Llegada[] | null }) => {
+  const pintaBus = () => {
     const el = document.getElementById('rt0'); if (!el || tok !== planToken) return;
+    if (p.nextBus === undefined) return;
+    if (p.nextBus === null) { el.textContent = 'Sin próximo bus previsto ahora mismo'; return; }
+    const m = Math.round((p.nextBus - Date.now()) / 60000);
+    el.innerHTML = m >= 90 ? `<b class="rt" style="color:var(--orange)">Sin buses hasta ${hasta(p.nextBus)}</b> (horario)` : `<b class="rt">Próximo bus: ${m} min</b> (${p.nextBusLive ? 'en directo' : 'horario'})`;
+  };
+  if (p.nextBus !== undefined) pintaBus();
+  else fetch(`/tr/parada/${first.stops[0].codigo}`).then((r) => r.json()).then(({ llegadas }: { llegadas: Llegada[] | null }) => {
+    if (tok !== planToken) return;
     const n = llegadas?.find((l) => l.linea === first.linea && new Date(l.hora).getTime() > Date.now() - 20000);
-    el.innerHTML = n ? `<b class="rt">Próximo bus: ${mins(n.hora) >= 90 ? 'a las ' + hhmm(n.hora) : mins(n.hora) + ' min'}</b> (${n.enVivo ? 'en directo' : 'horario'})` : 'Sin próximo bus previsto ahora mismo';
+    p.nextBus = llegadas ? (n ? new Date(n.hora).getTime() : null) : undefined; p.nextBusLive = !!n?.enVivo;
+    pintaBus(); updateMeta(); renderPlanUI();
   }).catch(() => { const el = document.getElementById('rt0'); if (el) el.textContent = ''; });
+  if (p.walkAlone === undefined && planFrom && planDest) {
+    fetch(`/walk?a=${planFrom.lat},${planFrom.lon}&b=${planDest.lat},${planDest.lon}`).then((r) => r.json()).then((j: { routes?: { distance: number; duration: number }[] }) => {
+      p.walkAlone = j.routes?.[0] ? { m: j.routes[0].distance, s: j.routes[0].duration } : null; if (tok === planToken) updateMeta();
+    }).catch(() => { p.walkAlone = null; });
+  }
 }
 
 // ============ Pantalla de inicio: avisos, favoritas, casa/trabajo, tarifas ============

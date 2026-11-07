@@ -15,6 +15,9 @@ export type Plan = {
   minutes: number;   // duración total estimada (a pie + esperas + bus)
   walkM: number;     // metros totales a pie
   buses: number;     // autobuses distintos (sin contar continuar en cabecera)
+  nextBus?: number | null;                  // hora real (ms) del próximo bus en la primera parada; null = sin datos
+  nextBusLive?: boolean;
+  walkAlone?: { m: number; s: number } | null; // ir andando directamente (por calles)
 };
 
 export type Profile = { id: string; label: string; boardS: number; walkW: number; maxEnd: number };
