@@ -50,6 +50,10 @@ Worker, primera vez: `wrangler d1 create bus-huelva`, poner el `database_id` en 
 - **CI:** compila en cada push.
 - **Comprobar API de EMTUSA:** cada día; si algo cambia de forma, abre una issue.
 - **Actualizar red de líneas:** cada lunes; si cambian recorridos o paradas, abre un PR.
+- **Actualizar calles y sitios:** el día 1 de cada mes regenera `calles.json` desde OpenStreetMap; si hay cambios, abre un PR. Se niega a sustituir el índice si la respuesta trae menos del 70 % de las entradas actuales (datos incompletos).
+- **Desplegar en Cloudflare Pages:** al fusionar cambios en `main` publica la app sola, pero **solo si** existen los secretos `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID` en el repositorio (si no, se omite sin error y se despliega a mano).
+
+Requisito de los PR automáticos: en GitHub → Settings → Actions → General → *Workflow permissions* → activar **Allow GitHub Actions to create and approve pull requests**.
 
 ## Limitaciones conocidas
 - Son endpoints internos de la web de EMTUSA, sin contrato: pueden cambiar sin aviso (de ahí la comprobación diaria).
