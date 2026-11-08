@@ -170,14 +170,26 @@ function setDir(d: number) {
 
 // Inicio y ficha de parada/ruta: se pliegan arrastrando el asa hacia abajo (o tocándola) para ver el mapa en grande
 for (const id of ['home', 'sheet']) {
-  const el = $(id); let y0 = 0, on = false, moved = false;
-  el.addEventListener('pointerdown', (e) => { const t = e.target as HTMLElement; if (t.closest('button,a,select,input')) return; if (!t.closest('.grab') && !(el.classList.contains('mini') && t.closest('.head'))) return; on = true; moved = false; y0 = e.clientY; });
-  el.addEventListener('pointermove', (e) => { if (on && Math.abs(e.clientY - y0) > 6) moved = true; });
+  const el = $(id); let y0 = 0, on = false, moved = false, base = 0, max = 0, t0 = 0, last = 0;
+  const peek = () => { const hd = el.querySelector<HTMLElement>('.head'); return (hd ? hd.offsetTop + hd.offsetHeight : 60) + 6; };
+  el.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement; if (t.closest('button,a,select,input')) return;
+    if (!t.closest('.grab') && !(el.classList.contains('mini') && t.closest('.head'))) return;
+    on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; last = 0;
+    el.style.setProperty('--peek', peek() + 'px'); max = Math.max(0, el.offsetHeight - peek()); base = el.classList.contains('mini') ? max : 0;
+    try { el.setPointerCapture(e.pointerId); } catch { /* evento sintético */ }
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!on) return; const dy = e.clientY - y0; if (Math.abs(dy) > 6) moved = true; if (!moved) return;
+    el.style.transition = 'none'; last = Math.max(0, Math.min(max, base + dy)); el.style.transform = `translateY(${last}px)`;
+  });
   const fin = (e: PointerEvent) => {
-    if (!on) return; on = false; const dy = e.clientY - y0;
-    if (!moved) el.classList.toggle('mini'); else el.classList.toggle('mini', dy > 0);
+    if (!on) return; on = false; const dy = e.clientY - y0, vel = dy / Math.max(1, e.timeStamp - t0);
+    const mini = !moved ? !el.classList.contains('mini') : (last + vel * 160 > max / 2);
+    // se suelta desde la posición actual y se anima hasta la final
+    el.style.transition = ''; el.style.transform = ''; el.classList.toggle('mini', mini);
   };
-  el.addEventListener('pointerup', fin); el.addEventListener('pointercancel', () => { on = false; });
+  el.addEventListener('pointerup', fin); el.addEventListener('pointercancel', () => { on = false; el.style.transition = ''; el.style.transform = ''; });
 }
 
 /** Si la tarjeta "Mi parada" no cabe en la hoja, la sube a la altura mínima que la muestra entera (sin tapar el mapa más de lo necesario). */

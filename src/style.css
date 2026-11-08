@@ -275,8 +275,8 @@ body.picking .sheet, body.picking #lines, body.picking #alarm, body.picking #bar
 .macts button:disabled { opacity:.3; }
 #mprev, #mnext { font-size:20px; padding-bottom:2px; }
 
-/* hojas plegadas: solo asa + cabecera, para ver el mapa en grande */
-.sheet.auto.mini { overflow:hidden; }
-.sheet.mini > :not(.grab):not(.head) { display:none; }
-.sheet.auto.mini .head { cursor:pointer; padding-bottom:2px; }
+/* hojas plegadas: solo asa + cabecera, para ver el mapa en grande (se desliza con el dedo) */
+.sheet.auto { transition:transform .32s cubic-bezier(.2,.9,.25,1); will-change:transform; }
+.sheet.auto.mini { transform:translateY(calc(100% - var(--peek, 70px))); }
+.sheet.auto.mini .head { cursor:pointer; touch-action:none; }
 #lsheet[style*="--h: 13"] #seg, #lsheet[style*="--h: 13"] #lbody { visibility:hidden; }
