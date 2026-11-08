@@ -117,7 +117,7 @@ function selectLine(code: string, opts: { dir?: number; stop?: string } = {}) {
   document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.l === code)); chips.classList.add('has-sel');
   (document.querySelector(`.chip[data-l="${CSS.escape(code)}"]`) as HTMLElement | null)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   drawLine(true);
-  $('lsheet').hidden = false; setDetent(1);
+  $('lsheet').hidden = false; setDetent(2);
   arrivals = new Map(); tracked = []; scrollBusPend = true;
   renderPanel(); refreshLive();
   clearInterval(refreshTimer); refreshTimer = window.setInterval(() => { if (!document.hidden) refreshLive(); }, POLL);
@@ -166,6 +166,18 @@ function setDir(d: number) {
   const mine = mineStore[linea.codigo]?.dir === d ? mineStore[linea.codigo].code : null;
   clearLine(); stopMarkers = []; sel = { linea, dir: d, route, mine: mine && route.stops.some((s) => s.codigo === mine) ? mine : null };
   drawLine(true); renderPanel(); refreshLive();
+}
+
+// Inicio y ficha de parada/ruta: se pliegan arrastrando el asa hacia abajo (o tocándola) para ver el mapa en grande
+for (const id of ['home', 'sheet']) {
+  const el = $(id); let y0 = 0, on = false, moved = false;
+  el.addEventListener('pointerdown', (e) => { const t = e.target as HTMLElement; if (t.closest('button,a,select,input')) return; if (!t.closest('.grab') && !(el.classList.contains('mini') && t.closest('.head'))) return; on = true; moved = false; y0 = e.clientY; });
+  el.addEventListener('pointermove', (e) => { if (on && Math.abs(e.clientY - y0) > 6) moved = true; });
+  const fin = (e: PointerEvent) => {
+    if (!on) return; on = false; const dy = e.clientY - y0;
+    if (!moved) el.classList.toggle('mini'); else el.classList.toggle('mini', dy > 0);
+  };
+  el.addEventListener('pointerup', fin); el.addEventListener('pointercancel', () => { on = false; });
 }
 
 /** Si la tarjeta "Mi parada" no cabe en la hoja, la sube a la altura mínima que la muestra entera (sin tapar el mapa más de lo necesario). */
@@ -506,12 +518,12 @@ try {
 } catch { /* sin Dynamic Type */ }
 
 // hoja arrastrable con tres alturas (como Mapas de iOS)
-const DETENTS = [30, 52, 72, 90]; let detent = 1;
+const DETENTS = [13, 30, 52, 72, 90]; let detent = 2; // 13 = plegada (solo cabecera: mapa en grande)
 function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1, i)); const el = $('lsheet'); el.style.height = ''; el.style.setProperty('--h', String(DETENTS[detent])); }
 (() => {
   const el = $('lsheet'); let y0 = 0, h0 = 0, t0 = 0, moved = false, on = false;
   const down = (e: PointerEvent) => { if ((e.target as HTMLElement).closest('button')) return; on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; h0 = el.getBoundingClientRect().height; el.classList.add('dragging'); try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* evento sintético */ } };
-  const move = (e: PointerEvent) => { if (!on) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; el.style.height = Math.max(window.innerHeight * 0.2, Math.min(window.innerHeight * 0.9, h0 + dy)) + 'px'; };
+  const move = (e: PointerEvent) => { if (!on) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; el.style.height = Math.max(window.innerHeight * 0.1, Math.min(window.innerHeight * 0.9, h0 + dy)) + 'px'; };
   const up = (e: PointerEvent) => {
     if (!on) return; on = false; el.classList.remove('dragging');
     if (!moved) { setDetent((detent + 1) % DETENTS.length); return; }
@@ -684,7 +696,7 @@ function paintFav() { $('fav').textContent = current && favs.includes(current.co
 function closeStopSheet() { current = null; $('pseg').hidden = true; $('ptime').hidden = true; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
 function openStop(p: Parada) {
   if (sel) { setMineFromMap(p); return; }
-  current = p; $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
+  current = p; $('sheet').classList.remove('mini'); $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
   $('sname').textContent = p.nombre; $('smeta').textContent = `Parada ${p.codigo} · Líneas ${p.lineas.join(', ')} · toca una línea para seguir su bus`;
   $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; showHome(); paintFav();
   map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16), { duration: 0.5 });
@@ -823,7 +835,7 @@ async function planTo(d: Dest) {
   const from = await origin();
   planFrom = from; planDest = d; plans = planAll(graph, from, d); planIdx = 0;
   if (plans.length) await settlePlans(from, d);
-  current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').hidden = false; showHome();
+  current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').classList.remove('mini'); $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
   $('pseg').hidden = true; $('ptime').hidden = true;
   if (!plans.length) { void walkOnly(from, d); return; }
