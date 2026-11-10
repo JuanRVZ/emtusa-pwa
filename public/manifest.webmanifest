@@ -24,6 +24,5 @@
   "scope": "/",
   "display_override": [
     "standalone"
-  ],
-  "orientation": "portrait"
+  ]
 }

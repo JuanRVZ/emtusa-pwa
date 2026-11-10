@@ -5,7 +5,7 @@ import { buildGraph, planAll, dist, PROFILES, type Pt, type Plan, type Parada } 
 import { Route, type Rec } from './route';
 import { leafletLayer } from 'protomaps-leaflet';
 import { PMTiles, type Source } from 'pmtiles';
-import { pushSupported, getPushId, enablePush, createAlarm, deleteAlarm, listAlarms, testPush, type ServerAlarm } from './push';
+import { pushSupported, getPushId, enablePush, syncPush, createAlarm, deleteAlarm, listAlarms, testPush, type ServerAlarm } from './push';
 
 type Linea = { codigo: string; nombre: string; color: string; recorridos: Rec[] };
 type Llegada = { linea: string; colorLinea: string; hora: string; enVivo: boolean; fiabilidad: number; poste: string };
@@ -27,6 +27,19 @@ const POLL = 8000;        // cada cuánto se consulta la línea abierta
 const CADENCIA = 16000;   // intervalo de actualización del origen: duración por defecto de la animación
 
 const map = L.map('map', { zoomControl: false }).setView([37.2614, -6.9447], 14);
+L.control.zoom({ position: 'bottomright', zoomInTitle: 'Acercar', zoomOutTitle: 'Alejar' }).addTo(map); // solo visible con ratón (CSS)
+// Diseño ancho (escritorio, tableta y móvil apaisado): los paneles van en una columna a la izquierda y el mapa ocupa el resto.
+const wide = matchMedia('(min-width: 760px)');
+const PANEL = wide.matches && window.innerHeight <= 500 ? 372 : 424; // ancho de la columna (392) + márgenes
+/** Márgenes para encuadrar el mapa sin que lo tapen la barra, las líneas ni el panel abierto. */
+/** Los márgenes nunca dejan menos de 160 px libres: si no cupiera nada, Leaflet calcularía un zoom disparatado (el máximo)
+ *  y el mapa vectorial a ese zoom bloquea el teléfono. Por lo mismo el encuadre automático no pasa de zoom 16. */
+function fitOpts(frac = 0.38): L.FitBoundsOptions {
+  const sz = map.getSize(); const MIN = 160;
+  if (wide.matches) { const left = Math.max(0, Math.min(PANEL, sz.x - 24 - MIN)); return { paddingTopLeft: [left, 70], paddingBottomRight: [24, 24], maxZoom: 16 }; }
+  const top = sz.y > 420 ? 110 : 60; const bottom = Math.max(0, Math.min(sz.y * Math.min(frac, 0.55), sz.y - top - MIN));
+  return { paddingTopLeft: [0, top], paddingBottomRight: [0, bottom], maxZoom: 16 };
+}
 // Mapa propio: vector de OpenStreetMap (extracto de Protomaps, 2,8 MB) alojado junto a la app, con estilo claro/oscuro real.
 // Se descarga entero una vez y se lee desde memoria (Cloudflare Pages no admite lecturas por trozos); si falla, se usa el mapa raster público.
 const AREA = L.latLngBounds([37.18, -7.05], [37.36, -6.82]);
@@ -150,7 +163,7 @@ function drawLine(fit: boolean) {
   });
   paintMinutes();
   updateMineMarker();
-  if (fit) map.fitBounds(L.latLngBounds(route.pts).pad(0.12), { paddingBottomRight: [0, window.innerHeight * 0.38] });
+  if (fit) map.fitBounds(L.latLngBounds(route.pts).pad(0.05), fitOpts(wide.matches ? 0 : DETENTS[detent] / 100));
 }
 
 function paintMinutes() {
@@ -173,7 +186,7 @@ for (const id of ['home', 'sheet']) {
   const el = $(id); let y0 = 0, on = false, moved = false, base = 0, max = 0, t0 = 0, last = 0;
   const peek = () => { const hd = el.querySelector<HTMLElement>('.head'); return (hd ? hd.offsetTop + hd.offsetHeight : 60) + 6; };
   el.addEventListener('pointerdown', (e) => {
-    const t = e.target as HTMLElement; if (t.closest('button,a,select,input')) return;
+    const t = e.target as HTMLElement; if (wide.matches || t.closest('button,a,select,input')) return;
     if (!t.closest('.grab') && !(el.classList.contains('mini') && t.closest('.head'))) return;
     on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; last = 0;
     el.style.setProperty('--peek', peek() + 'px'); max = Math.max(0, el.offsetHeight - peek()); base = el.classList.contains('mini') ? max : 0;
@@ -194,7 +207,7 @@ for (const id of ['home', 'sheet']) {
 
 /** Si la tarjeta "Mi parada" no cabe en la hoja, la sube a la altura mínima que la muestra entera (sin tapar el mapa más de lo necesario). */
 function fitSheet() {
-  const el = $('lsheet'); if (el.hidden || !sel?.mine) return;
+  const el = $('lsheet'); if (el.hidden || !sel?.mine || wide.matches) return;
   const hoja = el.getBoundingClientRect().height, cuerpo = $('lbody').getBoundingClientRect().height;
   const need = (hoja - cuerpo) + $('mine').offsetHeight + 8 + 96; // cabecera + tarjeta entera + asomo de la lista
   if (need <= hoja) return;
@@ -235,8 +248,9 @@ function stepMine(d: number) {
 }
 
 function focusAbove(ll: [number, number]) {
-  const h = $('lsheet').getBoundingClientRect().height; const z = Math.max(map.getZoom(), 15);
-  map.setView(map.unproject(map.project(ll, z).add([0, h / 2]), z), z, { animate: true });
+  const z = Math.max(map.getZoom(), 15);
+  const off: [number, number] = wide.matches ? [-PANEL / 2, 0] : [0, $('lsheet').getBoundingClientRect().height / 2 - 50];
+  map.setView(map.unproject(map.project(ll, z).add(off), z), z, { animate: true });
 }
 
 function clearMine() {
@@ -432,6 +446,7 @@ let repDays = '1,2,3,4,5'; let repTime = '08:00'; let repMin = 5;
 // ---------- Pantalla "Alarmas y avisos" ----------
 const alActive = () => !!alarm && !!sel && alarm.code === sel.mine && alarm.linea === sel.linea.codigo && alarm.dir === sel.dir;
 function alOpen() { if (!sel?.mine) return; $('alsheet').hidden = false; renderAlPanel(); $('alsheet').scrollTop = 0; }
+$('alsheet').querySelector<HTMLElement>('.grab')!.onclick = () => alClose(); // tocar el asa cierra la pantalla
 function alClose() { $('alsheet').hidden = true; }
 function renderAlPanel() {
   const el = $('alsheet'); if (el.hidden) return;
@@ -439,10 +454,11 @@ function renderAlPanel() {
   const body = $('albody'); const ae = document.activeElement as HTMLElement | null;
   if (ae && body.contains(ae) && /^(SELECT|INPUT)$/.test(ae.tagName)) return; // no pisar lo que se está editando
   const p = byCode.get(sel.mine)!; $('alsub').textContent = `${p.nombre} · Línea ${sel.linea.codigo}`;
-  const supported = pushSupported(); const on = !!getPushId();
+  const supported = pushSupported(); const denied = supported && Notification.permission === 'denied'; const on = !!getPushId() && !denied;
   const o = (v: string, t: string) => `<option value="${v}" ${repDays === v ? 'selected' : ''}>${t}</option>`;
   const cloud = !supported
     ? `<p>${/iPhone|iPad/.test(navigator.userAgent) ? 'En iPhone, añade primero la app a la pantalla de inicio (Compartir → Añadir a pantalla de inicio) y ábrela desde el icono.' : 'Este navegador no admite avisos con la app cerrada.'}</p>`
+    : denied ? '<p>Las notificaciones están bloqueadas para esta app. Actívalas en los Ajustes del teléfono (Notificaciones → Bus Huelva) y vuelve a abrirla.</p>'
     : on ? '<p>✅ Activados en este dispositivo. Las alarmas sonarán aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushtest">Enviarme una prueba</button>'
     : '<p>Para que las alarmas suenen aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushon">Activar avisos en la nube</button>';
   body.innerHTML = `
@@ -512,8 +528,18 @@ function updateMine() {
   };
 }
 
-setInterval(() => { if (sel) { updateMine(); renderPanel(); paintMinutes(); renderAlPanel(); } }, 5000);
+setInterval(() => { if (sel && !document.hidden) { updateMine(); renderPanel(); paintMinutes(); renderAlPanel(); } }, 5000);
 
+map.on('click', () => { $('results').hidden = true; ($('q') as HTMLInputElement).blur(); });
+document.addEventListener('keydown', (e) => {
+  const q = $('q') as HTMLInputElement;
+  if (e.key === '/' && !/^(INPUT|SELECT|TEXTAREA)$/.test((e.target as HTMLElement).tagName)) { e.preventDefault(); q.focus(); return; }
+  if (e.key !== 'Escape') return;
+  if (!$('results').hidden || document.activeElement === q) { $('results').hidden = true; q.blur(); }
+  else if (!$('alsheet').hidden) alClose();
+  else if (!$('sheet').hidden) closeStopSheet();
+  else if (sel) closeLine();
+});
 // teclado y VoiceOver: Enter o espacio activan filas y el selector de altura
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -531,10 +557,11 @@ try {
 
 // hoja arrastrable con tres alturas (como Mapas de iOS)
 const DETENTS = [13, 30, 52, 72, 90]; let detent = 2; // 13 = plegada (solo cabecera: mapa en grande)
-function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1, i)); const el = $('lsheet'); el.style.height = ''; el.style.setProperty('--h', String(DETENTS[detent])); }
+function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1, i)); const el = $('lsheet'); el.style.height = ''; el.style.setProperty('--h', String(DETENTS[detent])); el.classList.toggle('folded', detent === 0); }
+wide.addEventListener('change', () => { for (const id of ['home', 'sheet']) $(id).classList.remove('mini'); $('lsheet').style.height = ''; refit(); });
 (() => {
   const el = $('lsheet'); let y0 = 0, h0 = 0, t0 = 0, moved = false, on = false;
-  const down = (e: PointerEvent) => { if ((e.target as HTMLElement).closest('button')) return; on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; h0 = el.getBoundingClientRect().height; el.classList.add('dragging'); try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* evento sintético */ } };
+  const down = (e: PointerEvent) => { if (wide.matches || (e.target as HTMLElement).closest('button')) return; on = true; moved = false; y0 = e.clientY; t0 = e.timeStamp; h0 = el.getBoundingClientRect().height; el.classList.add('dragging'); try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* evento sintético */ } };
   const move = (e: PointerEvent) => { if (!on) return; const dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true; el.style.height = Math.max(window.innerHeight * 0.1, Math.min(window.innerHeight * 0.9, h0 + dy)) + 'px'; };
   const up = (e: PointerEvent) => {
     if (!on) return; on = false; el.classList.remove('dragging');
@@ -544,7 +571,7 @@ function setDetent(i: number) { detent = Math.max(0, Math.min(DETENTS.length - 1
     let best = 0; DETENTS.forEach((d, i) => { if (Math.abs(d - pct) < Math.abs(DETENTS[best] - pct)) best = i; });
     setDetent(best);
   };
-  el.querySelector('.grab')!.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0) setDetent((detent + 1) % DETENTS.length); }); // activación por teclado/VoiceOver
+  el.querySelector('.grab')!.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0 && !wide.matches) setDetent((detent + 1) % DETENTS.length); }); // activación por teclado/VoiceOver
   for (const h of [el.querySelector('.grab')!, $('lhead')]) { h.addEventListener('pointerdown', down as EventListener); h.addEventListener('pointermove', move as EventListener); h.addEventListener('pointerup', up as EventListener); h.addEventListener('pointercancel', up as EventListener); }
 })();
 
@@ -583,7 +610,7 @@ function toggleAlarm(min: number) {
     alarm = { linea: sel.linea.codigo, dir: sel.dir, code: sel.mine, min };
     const cur = alarm; // con avisos en la nube activados, también se registra en el servidor (suena con la app cerrada)
     if (getPushId()) createAlarm({ linea: cur.linea, dir: cur.dir, code: cur.code, name: byCode.get(cur.code)?.nombre ?? '', min, kind: 'once' }).then((id) => { if (!id) return; if (alarm === cur) { cur.sid = id; saveAlarm(); } else deleteAlarm(id).catch(() => undefined); }).catch(() => toast('No pude registrar el aviso en la nube'));
-    toast(`Te aviso cuando falten ${min} min. Mantén la app abierta`);
+    toast(getPushId() ? `Te aviso cuando falten ${min} min, también con la app cerrada` : `Te aviso cuando falten ${min} min. Mantén la app abierta`);
     try { if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* iOS sin PWA instalada */ }
   }
   saveAlarm(); alarmCheck();
@@ -598,8 +625,9 @@ function saveAlarm() {
 async function manageWake() { // pantalla encendida mientras haya alarma: iOS pausa las webs en segundo plano
   try {
     const nav = navigator as unknown as { wakeLock?: { request(t: string): Promise<NonNullable<typeof wake>> } };
-    if (alarm && !wake && nav.wakeLock) { wake = await nav.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
-    else if (!alarm && wake) { await wake.release(); wake = null; }
+    const need = !!alarm && !alarm.sid && !document.hidden;
+    if (need && !wake && nav.wakeLock) { wake = await nav.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
+    else if (!need && wake) { await wake.release(); wake = null; }
   } catch { wake = null; }
 }
 
@@ -644,7 +672,8 @@ async function alarmCheck() {
 
 function beep() {
   try {
-    if (!audio) return; const t = audio.currentTime;
+    if (!audio) return; if (audio.state !== 'running') void audio.resume(); // iOS lo suspende al salir de la app
+    const t = audio.currentTime;
     [0, 0.28, 0.56].forEach((d) => { const o = audio!.createOscillator(), g = audio!.createGain(); o.frequency.value = 880; o.connect(g); g.connect(audio!.destination); g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.4, t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.22); o.start(t + d); o.stop(t + d + 0.25); });
   } catch { /* ignorar */ }
 }
@@ -655,23 +684,34 @@ function fireAlarm(a: Alarm, m: number) {
 }
 
 function notifyUser(msg: string) {
+  $('status').classList.remove('on'); // el aviso emergente no debe tapar la alarma
   const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>${/^[^\x00-\x7F]/.test(msg) ? '' : '🔔 '}${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
   beep(); try { navigator.vibrate?.([300, 120, 300, 120, 300]); } catch { /* iOS no vibra */ }
   try {
     if ('Notification' in window && Notification.permission === 'granted') {
       const opts = { body: msg, tag: 'bus-alarm', icon: '/icon-192.png' };
-      if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then((r) => { if (r) void r.showNotification('Bus Huelva', opts); else new Notification('Bus Huelva', opts); });
-      else new Notification('Bus Huelva', opts);
+      // en móviles solo vale la notificación del service worker (new Notification lanza una excepción en Android y no existe en iOS)
+      const directa = () => { try { new Notification('Bus Huelva', opts); } catch { /* no admitido */ } };
+      if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistration().then((r) => (r ? r.showNotification('Bus Huelva', opts) : directa())).catch(directa);
+      else directa();
     }
   } catch { /* ignorar */ }
 }
 
-paintAlarm(); if (alarm) { alarmTimer = window.setInterval(alarmCheck, 15000); alarmCheck(); manageWake(); }
+/** Si la alarma tenía gemela en la nube y el servidor ya la disparó (o caducó) con la app cerrada, se retira aquí también:
+ *  así no vuelve a sonar más tarde con el bus siguiente. */
+async function reconcileAlarm() {
+  const a = alarm; if (!a?.sid || !getPushId()) return;
+  try { const list = await listAlarms(); if (alarm === a && !list.some((x) => x.id === a.sid)) { alarm = null; saveAlarm(); } } catch { /* sin conexión: se comprueba la próxima vez */ }
+}
+paintAlarm(); if (alarm) { alarmTimer = window.setInterval(alarmCheck, alarm.kind === 'getoff' ? 8000 : 15000); void reconcileAlarm().then(() => { alarmCheck(); manageWake(); }); }
+// la suscripción push puede caducar o cambiar sin avisar (sobre todo en iOS): se revisa en cada arranque
+void syncPush().then((ok) => { if (!ok) { renderAlPanel(); } });
 
 // ============ Modo general (sin línea) ============
 function drawStops() {
   stopLayer.clearLayers();
-  for (const p of net.paradas) L.circleMarker([p.lat, p.lon], { radius: 6, color: '#fff', weight: 2, fillColor: '#0b3d91', fillOpacity: 1 }).on('click', () => openStop(p)).addTo(stopLayer);
+  for (const p of net.paradas) L.circleMarker([p.lat, p.lon], { radius: 5.5, color: '#fff', weight: 2, fillColor: '#0b3d91', fillOpacity: 1 }).on('click', () => openStop(p)).addTo(stopLayer);
 }
 
 async function loadBuses() {
@@ -711,7 +751,8 @@ function openStop(p: Parada) {
   current = p; $('sheet').classList.remove('mini'); $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
   $('sname').textContent = p.nombre; $('smeta').textContent = `Parada ${p.codigo} · Líneas ${p.lineas.join(', ')} · toca una línea para seguir su bus`;
   $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; showHome(); paintFav();
-  map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 16), { duration: 0.5 });
+  L.circleMarker([p.lat, p.lon], { radius: 11, color: '#fff', weight: 3, fillColor: '#007aff', fillOpacity: 1, interactive: false }).addTo(routeLayer); // parada abierta, destacada
+  { const z = Math.max(map.getZoom(), 16); const off: [number, number] = wide.matches ? [-PANEL / 2, 0] : [0, window.innerHeight * 0.18]; map.flyTo(map.unproject(map.project([p.lat, p.lon], z).add(off), z), z, { duration: 0.5 }); }
   loadArrivals();
 }
 function setMineFromMap(p: Parada) { if (sel?.route.stops.some((s) => s.codigo === p.codigo)) setMine(p.codigo); }
@@ -868,7 +909,7 @@ async function walkOnly(from: Pt, d: Dest) {
   const line = L.polyline([[from.lat, from.lon], [d.lat, d.lon]], { color: '#8e8e93', weight: 4, dashArray: '2 8' }).addTo(routeLayer);
   L.circleMarker([d.lat, d.lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(routeLayer);
   L.circleMarker([from.lat, from.lon], { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(routeLayer);
-  map.fitBounds(L.latLngBounds([[from.lat, from.lon], [d.lat, d.lon]]).pad(0.4), { paddingBottomRight: [0, window.innerHeight * 0.4] });
+  map.fitBounds(L.latLngBounds([[from.lat, from.lon], [d.lat, d.lon]]).pad(0.2), fitOpts(0.4));
   try {
     const j = (await (await fetch(`/walk?a=${from.lat},${from.lon}&b=${d.lat},${d.lon}`)).json()) as { routes?: { distance: number; duration: number; geometry: { coordinates: [number, number][] } }[] };
     const r = j.routes?.[0]; if (!r || tok !== planToken) return;
@@ -1000,7 +1041,7 @@ function drawPlan(p: Plan, from: Pt, to: Pt) {
   const acc = { sec: 0, n: 0, total: segs.length, p };
   segs.forEach((sg) => walkSeg(sg.a, sg.b, sg.id, token, acc));
   L.circleMarker([to.lat, to.lon], { radius: 9, color: '#fff', weight: 3, fillColor: '#ff3b30', fillOpacity: 1 }).addTo(routeLayer);
-  map.fitBounds(L.latLngBounds([...pts, [from.lat, from.lon], [to.lat, to.lon]]).pad(0.25), { paddingBottomRight: [0, window.innerHeight * 0.4] });
+  map.fitBounds(L.latLngBounds([...pts, [from.lat, from.lon], [to.lat, to.lon]]).pad(0.1), fitOpts(0.45));
 }
 
 function renderPlan(p: Plan, to: Dest) {
@@ -1041,7 +1082,13 @@ type Aviso = { titulo: string; slug: string; severidad: string; vigenciaDesde: s
 type Tarifa = { titulo: string; importe: number; unidad: string; destacada?: boolean };
 type Place = { lat: number; lon: number; name: string };
 let avisos: Aviso[] = []; let tarifas: Tarifa[] = [];
-let homeView: 'home' | 'tarifas' = 'home';
+let homeView: 'home' | 'tarifas' = 'home'; let avisosAll = false;
+const svg = (d: string) => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICO = {
+  home: svg('<path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/>'),
+  work: svg('<rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 13h17"/>'),
+  ticket: svg('<path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v2m0 3v2m0 3v2"/>'),
+};
 let places: { home?: Place; work?: Place } = {};
 try { places = JSON.parse(localStorage.getItem('places') ?? '{}'); } catch { places = {}; }
 let saving: 'home' | 'work' | null = null;
@@ -1078,8 +1125,8 @@ function renderHome() {
   const favRows = net.paradas.filter((p) => favs.includes(p.codigo)).slice(0, 6).map((p) => `<li class="frow" data-c="${p.codigo}" role="button" tabindex="0" aria-label="Parada ${esc(p.nombre)}"><span class="nm">${esc(p.nombre)}<small>${p.codigo}</small></span><span class="fa" id="fa-${p.codigo}"></span></li>`).join('');
   h.innerHTML = `<div class="grab"><i></i></div>
     <div class="head"><div><h2>Bus Huelva</h2><small>EMTUSA · tiempo real</small></div></div>
-    ${avisos.slice(0, 3).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></a>`).join('')}
-    <div class="quick">${place('home', '🏠', 'Casa')}${place('work', '💼', 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">🎫</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
+    <div class="quick">${place('home', ICO.home, 'Casa')}${place('work', ICO.work, 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">${ICO.ticket}</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
+    ${avisos.length ? `<h3 class="sec">Avisos de EMTUSA</h3><div class="avisos">${avisos.slice(0, avisosAll ? 12 : 2).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><i></i><span><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></span></a>`).join('')}${avisos.length > 2 && !avisosAll ? `<button class="aviso more" data-act="avisos">Ver ${avisos.length - 2} más</button>` : ''}</div>` : ''}
     <div id="hal"></div>
     ${lugares.length ? `<h3 class="sec">Mis lugares</h3><ul class="flist">${lugares.map((l, i) => `<li class="frow lugar" data-i="${i}" role="button" tabindex="0"><span class="nm">⭐ ${esc(l.n)}</span><button class="round" data-act="dellugar" data-i="${i}" aria-label="Borrar ${esc(l.n)}">✕</button></li>`).join('')}</ul>` : ''}
     <h3 class="sec">Mis paradas</h3>
@@ -1088,14 +1135,14 @@ function renderHome() {
 }
 
 async function homeArrivals() {
-  for (const p of net.paradas.filter((x) => favs.includes(x.codigo)).slice(0, 6)) {
+  await Promise.all(net.paradas.filter((x) => favs.includes(x.codigo)).slice(0, 6).map(async (p) => {
     try {
       const { llegadas } = (await (await fetch(`/tr/parada/${p.codigo}`)).json()) as { llegadas: Llegada[] | null };
-      const el = document.getElementById('fa-' + p.codigo); if (!el) continue;
+      const el = document.getElementById('fa-' + p.codigo); if (!el) return;
       const ls = (llegadas ?? []).filter((l) => new Date(l.hora).getTime() > Date.now() - 20000).slice(0, 3);
       el.innerHTML = ls.length ? ls.map((l) => `<span class="mini ${l.enVivo ? 'live' : ''}" style="--c:${l.colorLinea}"><b>${esc(l.linea)}</b> ${etaTxt(l.hora).replace(' min', "'")}</span>`).join('') : '<span class="none">Sin buses</span>';
     } catch { /* sin conexión */ }
-  }
+  }));
 }
 
 const dayLbl = (d: string | null) => d === '1,2,3,4,5' ? 'L–V' : d === '0,6' ? 'Fin de semana' : d === '0,1,2,3,4,5,6' ? 'Todos los días' : (d ?? '');
@@ -1120,6 +1167,7 @@ $('home').addEventListener('click', (e) => {
   const fr = el.closest('.frow') as HTMLElement | null; if (fr) { const p = byCode.get(fr.dataset.c!); if (p) openStop(p); return; }
   const b = el.closest('[data-act]') as HTMLElement | null; if (!b) return; const act = b.dataset.act!;
   if (act === 'delal') { deleteAlarm(b.dataset.id!).then(loadHomeAlarms).catch(() => toast('No pude borrar la alarma')); return; }
+  if (act === 'avisos') { avisosAll = true; renderHome(); return; }
   if (act === 'tarifas') { homeView = 'tarifas'; renderHome(); }
   else if (act === 'back') { homeView = 'home'; renderHome(); }
   else if (act === 'home' || act === 'work') {
@@ -1134,16 +1182,21 @@ $('home').addEventListener('click', (e) => {
 drawStops(); loadBuses();
 setInterval(() => { if (!document.hidden) loadBuses(); }, 10000);
 setInterval(() => { if (!document.hidden) loadArrivals(); }, 15000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); if (alarm) { manageWake(); alarmCheck(); } } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadBuses(); loadArrivals(); if (sel) refreshLive(); if (alarm) void reconcileAlarm().then(() => { manageWake(); alarmCheck(); }); } else if (wake) void manageWake(); });
 loadInfo(); showHome();
 window.addEventListener('offline', () => toast('Sin conexión: no hay datos en directo'));
 window.addEventListener('online', () => { toast('Conexión recuperada'); loadBuses(); loadInfo(); if (sel) refreshLive(); });
-{ // enlaces compartidos: /?l=8&d=0&p=1034  ó  /?p=1034
-  const qs = new URLSearchParams(location.search); const l = qs.get('l'), pc = qs.get('p'), d = qs.get('d');
+/** Enlaces compartidos y notificaciones: /?l=8&d=0&p=1034  ó  /?p=1034 */
+function openLink(search: string) {
+  const qs = new URLSearchParams(search); const l = qs.get('l'), pc = qs.get('p'), d = qs.get('d');
   if (l && lineaDe.has(l)) selectLine(l, { dir: d !== null ? +d : undefined, stop: pc ?? undefined });
   else if (pc && byCode.has(pc)) openStop(byCode.get(pc)!);
 }
-if ('serviceWorker' in navigator && import.meta.env.PROD) navigator.serviceWorker.register('/sw.js');
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => { const m = e.data as { type?: string; url?: string } | null; if (m?.type === 'open' && m.url) { $('ring').hidden = true; openLink(new URL(m.url, location.origin).search); void reconcileAlarm(); } });
+  if (import.meta.env.PROD) navigator.serviceWorker.register('/sw.js');
+}
+openLink(location.search);
 
 // ============ Diagnóstico de pantalla (5 toques seguidos en el título "Bus Huelva" del inicio, o ?diag=1) ============
 let diagEl: HTMLPreElement | null = null; let diagTimer: number | undefined;

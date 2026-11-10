@@ -111,6 +111,8 @@ async function tick(env: Env) {
   if (t.h === 4 && t.m === 0) await env.DB.prepare('DELETE FROM snaps WHERE ts < ?1').bind(ts - 30 * 86400).run();
 
   // 2) alarmas
+  // las de "una vez" que no llegaron a dispararse caducan a las 3 h: si no, sonarían por sorpresa con el primer bus del día siguiente
+  await env.DB.prepare("DELETE FROM alarms WHERE kind='once' AND (active=0 OR created < ?1)").bind(now.getTime() - 3 * 3600e3).run();
   const { results } = await env.DB.prepare('SELECT a.*, s.endpoint, s.p256dh, s.auth FROM alarms a JOIN subs s ON s.id=a.sub_id WHERE a.active=1').all();
   if (!results.length) return;
   const nowMin = t.h * 60 + t.m;

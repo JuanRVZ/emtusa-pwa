@@ -26,6 +26,24 @@ export async function enablePush(): Promise<string> {
   return id;
 }
 
+/** Revisa en el arranque que la suscripción de este dispositivo sigue viva y registrada en el servidor.
+ *  iOS y Android pueden caducarla o cambiarla sin avisar; sin esto la app decía "activados" y los avisos no llegaban.
+ *  Devuelve false si los avisos han dejado de estar activos (permiso retirado). No pide permiso: no necesita gesto. */
+export async function syncPush(): Promise<boolean> {
+  const id = getPushId(); if (!id) return true;
+  if (!pushSupported()) return true; // p. ej. la misma web abierta fuera de la app instalada: no se toca nada
+  if (Notification.permission !== 'granted') { try { localStorage.removeItem('pushId'); } catch { /* ignorar */ } return false; }
+  try {
+    const reg = (await navigator.serviceWorker.getRegistration()) ?? (await navigator.serviceWorker.register('/sw.js'));
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) { const { publicKey } = await api<{ publicKey: string }>('/vapid'); sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64(publicKey) }); }
+    // mismo id: el servidor actualiza el endpoint (o vuelve a crear la suscripción si la había borrado por caducada)
+    await api('/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, subscription: sub.toJSON() }) });
+  } catch { /* sin conexión o sin service worker (desarrollo): se reintenta en el próximo arranque */ }
+  return true;
+}
+
 export type ServerAlarm = { id: string; linea: string; dir: number; code: string; name: string; min: number; kind: 'once' | 'weekly'; days: string | null; time: string | null; last_fired: string | null };
 export type NewAlarm = { linea: string; dir: number; code: string; name: string; min: number; kind: 'once' | 'weekly'; days?: string; time?: string };
 
