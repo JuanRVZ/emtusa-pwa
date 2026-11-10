@@ -34,6 +34,7 @@ const PANEL = wide.matches && window.innerHeight <= 500 ? 372 : 424; // ancho de
 /** Márgenes para encuadrar el mapa sin que lo tapen la barra, las líneas ni el panel abierto. */
 /** Los márgenes nunca dejan menos de 160 px libres: si no cupiera nada, Leaflet calcularía un zoom disparatado (el máximo)
  *  y el mapa vectorial a ese zoom bloquea el teléfono. Por lo mismo el encuadre automático no pasa de zoom 16. */
+if (wide.matches) map.panBy([-PANEL / 2, 0], { animate: false });
 function fitOpts(frac = 0.38): L.FitBoundsOptions {
   const sz = map.getSize(); const MIN = 160;
   if (wide.matches) { const left = Math.max(0, Math.min(PANEL, sz.x - 24 - MIN)); return { paddingTopLeft: [left, 70], paddingBottomRight: [24, 24], maxZoom: 16 }; }
@@ -43,7 +44,20 @@ function fitOpts(frac = 0.38): L.FitBoundsOptions {
 // Mapa propio: vector de OpenStreetMap (extracto de Protomaps, 2,8 MB) alojado junto a la app, con estilo claro/oscuro real.
 // Se descarga entero una vez y se lee desde memoria (Cloudflare Pages no admite lecturas por trozos); si falla, se usa el mapa raster público.
 const AREA = L.latLngBounds([37.18, -7.05], [37.36, -6.82]);
-map.setMinZoom(11); map.setMaxBounds(AREA.pad(0.15));
+// Límites: el mapa propio solo tiene datos de esta zona, así que ni el arrastre ni el zoom deben enseñar lo de fuera (se vería vacío).
+// En pantallas anchas el zoom mínimo depende del tamaño de la ventana: es el más alejado en el que la zona todavía llena toda la pantalla.
+// En el móvil la pantalla es estrecha y la hoja tapa media: se deja un margen para que una línea entera siga cabiendo en lo que queda visible.
+const anchoMq = matchMedia('(min-width: 760px)');
+map.options.maxBoundsViscosity = 1; // borde firme: no se puede arrastrar fuera ni un momento
+function limitZoom() {
+  const sz = map.getSize(); if (!sz.x || !sz.y) return;
+  if (!anchoMq.matches) { map.setMaxBounds(AREA.pad(0.15)); if (map.getMinZoom() !== 12) map.setMinZoom(12); return; }
+  map.setMaxBounds(AREA);
+  const Z0 = 13, nw = map.project(AREA.getNorthWest(), Z0), se = map.project(AREA.getSouthEast(), Z0);
+  const z = Math.max(11, Math.ceil(map.getScaleZoom(Math.max(sz.x / (se.x - nw.x), sz.y / (se.y - nw.y)), Z0) * 20) / 20);
+  if (z !== map.getMinZoom()) map.setMinZoom(z);
+}
+limitZoom();
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 const forcedFlavor = ({ claro: 'light', oscuro: 'dark' } as Record<string, string>)[new URLSearchParams(location.search).get('mapa') ?? ''] ?? null; // ?mapa=claro|oscuro (solo para revisar estilos)
 class MemSource implements Source {
@@ -66,7 +80,7 @@ fetch('/data/huelva.pmtiles').then((r) => (r.ok ? r.arrayBuffer() : Promise.reje
 map.on('zoomend', () => map.getContainer().classList.toggle('z-low', map.getZoom() < 15)); map.getContainer().classList.toggle('z-low', map.getZoom() < 15);
 // Tamaño del mapa: en iOS la ventana de una PWA cambia justo después de arrancar y a veces no llega el evento "resize";
 // Leaflet solo mide al crearse, así que se vigila el propio contenedor y se revisa tras el arranque y al volver a la app.
-const refit = () => map.invalidateSize({ animate: false });
+const refit = () => { map.invalidateSize({ animate: false }); limitZoom(); };
 new ResizeObserver(refit).observe($('map'));
 window.addEventListener('resize', refit); window.addEventListener('orientationchange', () => setTimeout(refit, 300));
 window.visualViewport?.addEventListener('resize', refit);
@@ -92,6 +106,34 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const destino = (r: Rec) => r.sentido.split('hacia')[1]?.trim() ?? r.sentido;
 const fmtDist = (m: number) => (m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+
+// Iconos de trazo fino (heredan el color y el tamaño del texto que los rodea)
+const svg = (d: string) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICO = {
+  home: svg('<path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/>'),
+  work: svg('<rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 13h17"/>'),
+  ticket: svg('<path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v2m0 3v2m0 3v2"/>'),
+  bell: svg('<path d="M6 16v-5a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>'),
+  getoff: svg('<path d="M8.5 3h7L21 8.5v7L15.5 21h-7L3 15.5v-7z"/><path d="M8 12h8"/>'),
+  cloud: svg('<path d="M7 18a4 4 0 0 1-.5-7.97A5.5 5.5 0 0 1 17.2 9.1 4.5 4.5 0 0 1 17 18z"/>'),
+  repeat: svg('<path d="M4 11V9a3 3 0 0 1 3-3h11l-2.5-2.5M20 13v2a3 3 0 0 1-3 3H6l2.5 2.5"/>'),
+  pin: svg('<path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/><circle cx="12" cy="10" r="2.3"/>'),
+  walk: svg('<circle cx="13" cy="4.5" r="1.7"/><path d="m9 21 2.2-6.5L9.5 12l1-4.5 3 1.5 1.5 3 2.5 1M11.2 14.5 14 17l1 4M10.5 7.5l-3 2-.5 3"/>'),
+  ok: svg('<circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.8 2.8L16 9.5"/>'),
+  warn: svg('<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.1"/>'),
+  no: svg('<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>'),
+  ban: svg('<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>'),
+  moon: svg('<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.500z"/>'),
+  bus: svg('<rect x="5" y="3.5" width="14" height="14" rx="2.5"/><path d="M5 11.5h14M8 17.500V20M16 17.500V20M8.500 14.600v.1M15.500 14.600v.1"/>'),
+  stop: svg('<rect x="7" y="3" width="10" height="8" rx="2"/><path d="M12 11v10M9 21h6"/>'),
+  road: svg('<path d="M8 3 5 21M16 3l3 18M12 4v3M12 10.500v3M12 17v3"/>'),
+  tree: svg('<path d="M12 21v-6"/><circle cx="12" cy="9" r="6"/>'),
+  bag: svg('<path d="M5 8h14l-1 12H6z"/><path d="M9 8V7a3 3 0 0 1 6 0v1"/>'),
+  food: svg('<path d="M7 3v7a2 2 0 0 0 4 0V3M9 12v9M17 21V3c-2 1.500-3 4-3 7h3"/>'),
+  building: svg('<rect x="5" y="3" width="14" height="18" rx="1.500"/><path d="M9 7.500h.1M15 7.500h.1M9 11.500h.1M15 11.500h.1M10.500 21v-4h3v4"/>'),
+  star: svg('<path d="m12 3.500 2.600 5.400 5.900.8-4.300 4.100 1 5.900L12 16.900l-5.200 2.800 1-5.900-4.300-4.100 5.900-.8z"/>'),
+  plus: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>'),
+};
 
 // ============ Selector de líneas ============
 const chips = $('lines');
@@ -263,7 +305,7 @@ function updateMineMarker() {
   mineMarker?.remove(); mineMarker = null; mineSeg?.remove(); mineSeg = null;
   if (!sel?.mine) return;
   const p = byCode.get(sel.mine)!;
-  mineMarker = L.marker([p.lat, p.lon], { zIndexOffset: 500, icon: L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17], html: `<div class="mine-pin" style="--c:${sel.linea.color}">🚏</div>` }) }).addTo(lineLayer);
+  mineMarker = L.marker([p.lat, p.lon], { zIndexOffset: 500, icon: L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17], html: `<div class="mine-pin" style="--c:${sel.linea.color}">${ICO.stop}</div>` }) }).addTo(lineLayer);
 }
 
 let refrescando = false;
@@ -430,15 +472,15 @@ function walkInfo(p: Parada): { m: number; min: number } {
   const m = Math.round(dist(userPos!, p) * 1.3); return { m, min: Math.max(1, Math.round(m / 75)) };
 }
 function leaveHtml(p: Parada, idx: number, arr: LlegadaLinea[]): string {
-  if (!userPos) return `<div class="leave"><button data-act="geo">📍 ¿Llego a tiempo? Usar mi ubicación</button></div>`;
+  if (!userPos) return `<div class="leave"><button data-act="geo">${ICO.pin} ¿Llego a tiempo? Usar mi ubicación</button></div>`;
   const w = walkInfo(p); const e = etaFor(idx); const bus = e && e.src !== 'plan' ? e.min : null;
-  if (w.m < 40) return '<div class="leave ok">📍 Ya estás en la parada</div>';
-  if (bus === null) return `<div class="leave">🚶 Estás a ${w.min} min andando (${fmtDist(w.m)})</div>`;
+  if (w.m < 40) return `<div class="leave ok">${ICO.pin} Ya estás en la parada</div>`;
+  if (bus === null) return `<div class="leave">${ICO.walk} Estás a ${w.min} min andando (${fmtDist(w.m)})</div>`;
   const margin = bus - w.min;
-  if (margin >= 3) return `<div class="leave ok">✅ Llegas con ${margin} min de margen · sal en ${margin - 1} min <small>(${w.min} min andando)</small></div>`;
-  if (margin >= 0) return `<div class="leave warn">⚠️ Justo: sal ya <small>(${w.min} min andando, bus en ${bus} min)</small></div>`;
+  if (margin >= 3) return `<div class="leave ok">${ICO.ok} Llegas con ${margin} min de margen · sal en ${margin - 1} min <small>(${w.min} min andando)</small></div>`;
+  if (margin >= 0) return `<div class="leave warn">${ICO.warn} Justo: sal ya <small>(${w.min} min andando, bus en ${bus} min)</small></div>`;
   const n2 = arr[1] ? mins(arr[1].hora) : null;
-  return `<div class="leave bad">❌ No alcanzas este bus <small>(${w.min} min andando, llega en ${bus})</small>${n2 !== null && n2 - w.min >= 0 ? `<br>El siguiente, en ${n2} min, sí` : ''}</div>`;
+  return `<div class="leave bad">${ICO.no} No alcanzas este bus <small>(${w.min} min andando, llega en ${bus})</small>${n2 !== null && n2 - w.min >= 0 ? `<br>El siguiente, en ${n2} min, sí` : ''}</div>`;
 }
 
 let repDays = '1,2,3,4,5'; let repTime = '08:00'; let repMin = 5;
@@ -459,15 +501,15 @@ function renderAlPanel() {
   const cloud = !supported
     ? `<p>${/iPhone|iPad/.test(navigator.userAgent) ? 'En iPhone, añade primero la app a la pantalla de inicio (Compartir → Añadir a pantalla de inicio) y ábrela desde el icono.' : 'Este navegador no admite avisos con la app cerrada.'}</p>`
     : denied ? '<p>Las notificaciones están bloqueadas para esta app. Actívalas en los Ajustes del teléfono (Notificaciones → Bus Huelva) y vuelve a abrirla.</p>'
-    : on ? '<p>✅ Activados en este dispositivo. Las alarmas sonarán aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushtest">Enviarme una prueba</button>'
+    : on ? '<p><b class="good">Activados en este dispositivo.</b> Las alarmas sonarán aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushtest">Enviarme una prueba</button>'
     : '<p>Para que las alarmas suenen aunque cierres la app o bloquees el móvil.</p><button class="primary" data-act="pushon">Activar avisos en la nube</button>';
   body.innerHTML = `
-    <div class="algroup"><h3>🔔 Avisarme cuando mi bus esté cerca</h3><p>Te aviso cuando falten estos minutos para que llegue a tu parada.${on ? ' También suena con la app cerrada.' : ' Mantén la app abierta (o activa los avisos en la nube más abajo).'}</p>
+    <div class="algroup"><h3>${ICO.bell} Avisarme cuando mi bus esté cerca</h3><p>Te aviso cuando falten estos minutos para que llegue a tu parada.${on ? ' También suena con la app cerrada.' : ' Mantén la app abierta (o activa los avisos en la nube más abajo).'}</p>
       <div class="algrid">${[2, 5, 10].map((m) => `<button class="opt ${isMyAlarm(m) ? 'on' : ''}" data-m="${m}">${m} min</button>`).join('')}</div></div>
-    <div class="algroup"><h3>🛑 Me bajo aquí</h3><p>Ya dentro del bus, te aviso antes de llegar a tu parada usando el GPS. Mantén la app abierta y la ubicación activada.</p>
+    <div class="algroup"><h3>${ICO.getoff} Me bajo aquí</h3><p>Ya dentro del bus, te aviso antes de llegar a tu parada usando el GPS. Mantén la app abierta y la ubicación activada.</p>
       <button class="primary ${isGetOff() ? 'on' : ''}" data-act="getoff">${isGetOff() ? '✓ Activado · toca para cancelar' : 'Avisarme al acercarme'}</button></div>
-    <div class="algroup"><h3>☁️ Avisos con la app cerrada</h3>${cloud}</div>
-    <div class="algroup"><h3>🔁 Repetir cada día</h3><p>${on ? 'Crea una alarma que se repite sola, por ejemplo de lunes a viernes para tu trayecto de siempre. Vigila el bus durante 40 minutos desde la hora elegida.' : 'Primero activa los avisos en la nube (bloque de arriba) para poder repetir alarmas.'}</p>
+    <div class="algroup"><h3>${ICO.cloud} Avisos con la app cerrada</h3>${cloud}</div>
+    <div class="algroup"><h3>${ICO.repeat} Repetir cada día</h3><p>${on ? 'Crea una alarma que se repite sola, por ejemplo de lunes a viernes para tu trayecto de siempre. Vigila el bus durante 40 minutos desde la hora elegida.' : 'Primero activa los avisos en la nube (bloque de arriba) para poder repetir alarmas.'}</p>
       <label class="alfield">Días <select id="rdays" ${on ? '' : 'disabled'}>${o('1,2,3,4,5', 'Lunes a viernes')}${o('0,1,2,3,4,5,6', 'Todos los días')}${o('0,6', 'Fin de semana')}</select></label>
       <label class="alfield">Desde las <input type="time" id="rtime" value="${repTime}" ${on ? '' : 'disabled'} /></label>
       <label class="alfield">Avisar a <select id="rmin" ${on ? '' : 'disabled'}>${[2, 5, 10].map((m) => `<option value="${m}" ${repMin === m ? 'selected' : ''}>${m} min</option>`).join('')}</select></label>
@@ -506,7 +548,7 @@ function updateMine() {
   const ix = sel.route.stops.findIndex((x) => x.codigo === p.codigo);
   const next = arr[0]; const a = approaching();
   let where = 'Ningún bus de camino ahora mismo';
-  if (a) where = a.remain < 60 ? '🚌 ¡Llegando!' : `🚌 A ${a.away} parada${a.away === 1 ? '' : 's'} · ${fmtDist(a.remain)}`;
+  if (a) where = a.remain < 60 ? `${ICO.bus} ¡Llegando!` : `${ICO.bus} A ${a.away} parada${a.away === 1 ? '' : 's'} · ${fmtDist(a.remain)}`;
   else if (!liveOk) where = 'Sin datos de posición';
   // si hay un bus en camino pero el horario oficial no lo refleja, estimar por su posición
   const estMin = a ? Math.max(1, Math.round((a.remain / 4.5 + a.away * 20) / 60)) : null;
@@ -519,7 +561,7 @@ function updateMine() {
   box.innerHTML = `<div class="mtop"><div><small>MI PARADA</small><b>${esc(p.nombre)}</b></div><div class="macts"><button id="mprev" aria-label="Parada anterior" ${ix <= 0 ? 'disabled' : ''}>‹</button><button id="mnext" aria-label="Parada siguiente" ${ix >= sel.route.stops.length - 1 ? 'disabled' : ''}>›</button><button id="mshare" aria-label="Compartir">↗</button><button id="mclear" aria-label="Quitar">✕</button></div></div>
     <div class="mrow"><div class="mbig ${next?.enVivo && !useEst ? 'live' : ''}">${big}</div><div class="msub">${sub}<div class="mwhere">${where}</div></div></div>
     ${leaveHtml(p, sel.route.stops.findIndex((x) => x.codigo === p.codigo), arr)}
-    <button class="moptsb" data-act="alopen">🔔 Alarmas y avisos${alActive() ? ' · <b>activa</b>' : ''} <span>›</span></button>`;
+    <button class="moptsb" data-act="alopen"><span>${ICO.bell} Alarmas y avisos${alActive() ? ' · <b>activa</b>' : ''}</span><span>›</span></button>`;
   $('mclear').onclick = clearMine; $('mprev').onclick = () => stepMine(-1); $('mnext').onclick = () => stepMine(1);
   $('mshare').onclick = async () => {
     const url = `${location.origin}/?l=${encodeURIComponent(sel!.linea.codigo)}&d=${sel!.dir}&p=${p.codigo}`;
@@ -581,6 +623,26 @@ let alarm: Alarm | null = null;
 try { alarm = JSON.parse(localStorage.getItem('alarm') ?? 'null'); } catch { alarm = null; }
 let wake: { release(): Promise<void>; addEventListener(t: string, f: () => void): void } | null = null;
 let audio: AudioContext | null = null;
+// El interruptor de silencio del iPhone calla el audio web "ambiental". Dos defensas: declarar la sesión como reproducción
+// (Safari 16.4+) y hacer sonar el aviso con un <audio>, que va por el canal multimedia. Ambas se preparan con el gesto que crea la alarma.
+let tono: HTMLAudioElement | null = null;
+function tonoUrl(): string { // tres pitidos de 880 Hz en un WAV generado al vuelo (sin archivos)
+  const sr = 22050, n = Math.round(sr * 0.84), buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o: number, t: string) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) { const t = (i / sr) % 0.28, env = t < 0.22 ? Math.min(1, t / 0.01, (0.22 - t) / 0.03) : 0; v.setInt16(44 + i * 2, Math.sin(2 * Math.PI * 880 * (i / sr)) * env * 0.6 * 32767, true); }
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+/** Desbloquea el sonido; hay que llamarlo desde un gesto del usuario (al activar una alarma). */
+function armSound() {
+  try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ }
+  try { const as = (navigator as unknown as { audioSession?: { type: string } }).audioSession; if (as) as.type = 'playback'; } catch { /* no admitido */ }
+  try {
+    if (!tono) { tono = new Audio(tonoUrl()); tono.preload = 'auto'; }
+    const t = tono; t.muted = true; void t.play().then(() => { t.pause(); t.currentTime = 0; t.muted = false; }).catch(() => { t.muted = false; });
+  } catch { /* sin <audio> */ }
+}
 let alarmTimer: number | undefined;
 
 const dropServer = (a: Alarm | null) => { if (a?.sid) deleteAlarm(a.sid).catch(() => { /* ya no existe */ }); };
@@ -589,7 +651,7 @@ const isGetOff = () => !!alarm && alarm.kind === 'getoff' && !!sel && alarm.line
 
 function toggleGetOff() {
   if (!sel?.mine) return;
-  try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ }
+  armSound();
   if (isGetOff()) { dropServer(alarm); alarm = null; toast('Aviso de bajada cancelado'); }
   else {
     dropServer(alarm);
@@ -603,7 +665,7 @@ function toggleGetOff() {
 
 function toggleAlarm(min: number) {
   if (!sel?.mine) return;
-  try { audio ??= new AudioContext(); void audio.resume(); } catch { /* sin audio */ } // hay que desbloquearlo con un gesto del usuario
+  armSound();
   if (isMyAlarm(min)) { dropServer(alarm); alarm = null; toast('Alarma cancelada'); }
   else {
     dropServer(alarm);
@@ -635,7 +697,7 @@ function paintAlarm() {
   const el = $('alarm');
   if (!alarm) { el.hidden = true; return; }
   const p = byCode.get(alarm.code); el.hidden = false;
-  el.innerHTML = `<span class="al-t">${alarm.kind === 'getoff' ? `🛑 Bajas en ${esc(p?.nombre ?? '')} · L${esc(alarm.linea)}` : `🔔 L${esc(alarm.linea)} · ${esc(p?.nombre ?? '')} · ≤${alarm.min} min`}</span><button aria-label="Cancelar alarma">✕</button>`;
+  el.innerHTML = `<span class="al-t">${alarm.kind === 'getoff' ? `${ICO.getoff} Bajas en ${esc(p?.nombre ?? '')} · L${esc(alarm.linea)}` : `${ICO.bell} L${esc(alarm.linea)} · ${esc(p?.nombre ?? '')} · ≤${alarm.min} min`}</span><button aria-label="Cancelar alarma">✕</button>`;
   (el.querySelector('.al-t') as HTMLElement).onclick = () => { if (alarm) selectLine(alarm.linea, { dir: alarm.dir, stop: alarm.code }); };
   (el.querySelector('button') as HTMLElement).onclick = () => { dropServer(alarm); alarm = null; saveAlarm(); toast('Alarma cancelada'); };
 }
@@ -648,7 +710,7 @@ async function alarmCheck() {
     const pos = await getPos(); if (!pos || alarm !== a) return; userPos = pos;
     const sn = route.snap(pos.lat, pos.lon); if (!sn || sn.d > 150) return; // no vas sobre la ruta
     const remain = route.stopPos[idx] - sn.s; const left = idx - route.lastPassed(sn.s); const nm = route.stops[idx].nombre;
-    if (remain <= 150) { alarm = null; saveAlarm(); notifyUser(`🚏 ¡Bájate aquí! Parada ${nm}`); }
+    if (remain <= 150) { alarm = null; saveAlarm(); notifyUser(`¡Bájate aquí! Parada ${nm}`); }
     else if ((left <= 2 || remain <= 500) && !a.warned) { a.warned = true; saveAlarm(); notifyUser(`Prepárate: te bajas en ${nm} (a ${fmtDist(remain)})`); }
     return;
   }
@@ -671,6 +733,10 @@ async function alarmCheck() {
 }
 
 function beep() {
+  if (tono) { tono.currentTime = 0; tono.muted = false; void tono.play().catch(beepOsc); return; }
+  beepOsc();
+}
+function beepOsc() {
   try {
     if (!audio) return; if (audio.state !== 'running') void audio.resume(); // iOS lo suspende al salir de la app
     const t = audio.currentTime;
@@ -685,7 +751,7 @@ function fireAlarm(a: Alarm, m: number) {
 
 function notifyUser(msg: string) {
   $('status').classList.remove('on'); // el aviso emergente no debe tapar la alarma
-  const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>${/^[^\x00-\x7F]/.test(msg) ? '' : '🔔 '}${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
+  const ring = $('ring'); ring.hidden = false; ring.innerHTML = `<b>${ICO.bell} ${esc(msg)}</b><small>Toca para cerrar</small>`; ring.onclick = () => { ring.hidden = true; };
   beep(); try { navigator.vibrate?.([300, 120, 300, 120, 300]); } catch { /* iOS no vibra */ }
   try {
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -715,10 +781,10 @@ function drawStops() {
 }
 
 async function loadBuses() {
-  if (sel) return;
+  if (sel || planning) return;
   try {
     const r = await fetch('/tr/buses'); const { buses } = (await r.json()) as { buses: Bus[] | null };
-    if (sel) return; if (!buses) return toast('Sin datos de buses ahora mismo');
+    if (sel || planning) return; if (!buses) return toast('Sin datos de buses ahora mismo');
     busLayer.clearLayers();
     for (const b of buses) L.marker([b.lat, b.lon], { zIndexOffset: 1000, icon: L.divIcon({ className: '', iconSize: [30, 30], iconAnchor: [15, 15], html: `<div class="bus-pin sm" style="--c:${b.colorLinea}">${esc(b.linea)}</div>` }) })
       .on('click', () => selectLine(b.linea, { dir: b.sentido - 1 })).addTo(busLayer);
@@ -745,10 +811,11 @@ $('arr').addEventListener('click', (e) => {
 });
 
 function paintFav() { $('fav').textContent = current && favs.includes(current.codigo) ? '★' : '☆'; }
-function closeStopSheet() { current = null; $('pseg').hidden = true; $('ptime').hidden = true; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
+function endPlan() { if (!planning) return; planning = false; if (!sel) { drawStops(); loadBuses(); } }
+function closeStopSheet() { endPlan(); current = null; $('pseg').hidden = true; $('ptime').hidden = true; $('sheet').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; showHome(); }
 function openStop(p: Parada) {
   if (sel) { setMineFromMap(p); return; }
-  current = p; $('sheet').classList.remove('mini'); $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
+  endPlan(); current = p; $('sheet').classList.remove('mini'); $('results').hidden = true; routeLayer.clearLayers(); $('fav').hidden = false; $('pseg').hidden = true; $('ptime').hidden = true;
   $('sname').textContent = p.nombre; $('smeta').textContent = `Parada ${p.codigo} · Líneas ${p.lineas.join(', ')} · toca una línea para seguir su bus`;
   $('arr').innerHTML = '<li>Cargando…</li>'; $('sheet').hidden = false; showHome(); paintFav();
   L.circleMarker([p.lat, p.lon], { radius: 11, color: '#fff', weight: 3, fillColor: '#007aff', fillOpacity: 1, interactive: false }).addTo(routeLayer); // parada abierta, destacada
@@ -761,7 +828,7 @@ $('fav').onclick = () => { if (!current) return; const c = current.codigo; favs 
 
 // ---- Calles, plazas, barrios y lugares: índice propio, solo del municipio de Huelva (sin enviar nada a terceros) ----
 type Sitio = { n: string; k: number; lat: number; lon: number; tw: string[]; lw: string[]; lab: string; addr: string };
-const KIND_ICON = ['🛣️', '🌳', '🏘️', '📍', '🛍️', '🍽️', '🏢', '⭐']; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar', 'Comercio', 'Restaurante o bar', 'Servicio', 'Mi lugar'];
+const KIND_ICON = [ICO.road, ICO.tree, ICO.home, ICO.pin, ICO.bag, ICO.food, ICO.building, ICO.star]; const KIND_NAME = ['Calle', 'Plaza', 'Barrio', 'Lugar', 'Comercio', 'Restaurante o bar', 'Servicio', 'Mi lugar'];
 const SKIP = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'en']);
 const ABBR: Record<string, string> = { av: 'avenida', avda: 'avenida', avd: 'avenida', c: 'calle', cl: 'calle', pza: 'plaza', plza: 'plaza', pl: 'plaza', pso: 'paseo', ps: 'paseo', ctra: 'carretera', gta: 'glorieta', glta: 'glorieta', bda: 'barriada', urb: 'urbanizacion', hosp: 'hospital', sta: 'santa', sto: 'santo', rest: 'restaurante', super: 'supermercado', farm: 'farmacia' };
 const tokens = (t: string) => norm(t).replace(/[.,/()'"-]/g, ' ').split(/\s+/).filter(Boolean).map((w) => ABBR[w] ?? w).filter((w) => !SKIP.has(w));
@@ -805,7 +872,7 @@ const sitioItem = (s: Sitio) => {
   return { t: `${KIND_ICON[s.k]} ${esc(s.n)}`, s: esc((s.lab ? `${s.lab}${dir ? ' · ' + dir : ''}` : `${KIND_NAME[s.k]} · Huelva`) + (s.k >= 3 ? lejos : '')), go: () => planTo({ lat: s.lat, lon: s.lon, name: s.addr && !s.addr.startsWith('~') ? `${s.n} (${s.addr})` : dir ? `${s.n} (${dir})` : s.n }) };
 };
 
-const addItem = (raw: string) => ({ t: `➕ Añadir «${esc(raw.trim())}» como lugar`, s: 'Lo colocas tú en el mapa', go: () => startPick(raw.trim()) });
+const addItem = (raw: string) => ({ t: `${ICO.plus} Añadir «${esc(raw.trim())}» como lugar`, s: 'Lo colocas tú en el mapa', go: () => startPick(raw.trim()) });
 /** Modo "colocar un lugar": se mueve el mapa hasta el sitio y se guarda el centro. */
 function startPick(name: string) {
   $('results').hidden = true; mode = 'search'; $('go').classList.remove('active'); ($('q') as HTMLInputElement).value = ''; ($('q') as HTMLInputElement).blur();
@@ -822,7 +889,7 @@ function showResults(items: { t: string; s: string; go: () => void }[]) {
   ul.hidden = items.length === 0;
 }
 function favsList() {
-  showResults(net.paradas.filter((p) => favs.includes(p.codigo)).map((p) => ({ t: '★ ' + esc(p.nombre), s: p.lineas.join(' '), go: () => openStop(p) })));
+  showResults(net.paradas.filter((p) => favs.includes(p.codigo)).map((p) => ({ t: `${ICO.star} ${esc(p.nombre)}`, s: p.lineas.join(' '), go: () => openStop(p) })));
 }
 $('q').addEventListener('focus', () => { if (geoOn) void updateUserPos(); if (!($('q') as HTMLInputElement).value && mode === 'search') favsList(); });
 $('q').addEventListener('input', (e) => {
@@ -832,7 +899,7 @@ $('q').addEventListener('input', (e) => {
   const ls = net.lineas.filter((l) => norm(l.codigo) === q || norm(l.nombre).includes(q)).map((l) => ({
     t: `Línea ${esc(l.codigo)}`, s: esc(l.nombre), go: () => { $('results').hidden = true; selectLine(l.codigo); },
   }));
-  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
+  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q) || p.codigo === q).slice(0, 5).map((p) => ({ t: `${ICO.stop} ${esc(p.nombre)}`, s: `${p.codigo} · ${p.lineas.join(' ')}`, go: () => { if (sel) closeLine(); openStop(p); } }));
   showResults([...ls, ...buscarSitios(raw, 8).map(sitioItem), ...ps, ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
 });
 
@@ -845,7 +912,7 @@ $('loc').onclick = () => {
     const near = [...pool].sort((a, b) => d(a) - d(b)).slice(0, 8);
     L.circleMarker([la, lo], { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(map);
     map.setView([la, lo], 16);
-    showResults(near.map((p) => ({ t: esc(p.nombre), s: `${Math.round(d(p))} m · ${p.lineas.join(' ')}`, go: () => { $('results').hidden = true; if (sel) setMine(p.codigo); else openStop(p); } })));
+    showResults(near.map((p) => ({ t: `${ICO.stop} ${esc(p.nombre)}`, s: `${Math.round(d(p))} m · ${p.lineas.join(' ')}`, go: () => { $('results').hidden = true; if (sel) setMine(p.codigo); else openStop(p); } })));
   }, () => toast('No se pudo obtener tu ubicación'), { enableHighAccuracy: true, timeout: 8000 });
 };
 
@@ -857,7 +924,7 @@ function destSearch(raw: string) {
   if (hits.length) return showResults([...hits.map(sitioItem), ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
   // sin calles con ese nombre: paradas de bus de la zona (por si es un barrio que no figura como tal en el mapa)
   const q = norm(raw);
-  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q)).slice(0, 5).map((p) => ({ t: '🚏 ' + esc(p.nombre), s: 'Parada · ' + p.lineas.join(' '), go: () => planTo({ lat: p.lat, lon: p.lon, name: p.nombre }) }));
+  const ps = net.paradas.filter((p) => norm(p.nombre).includes(q)).slice(0, 5).map((p) => ({ t: `${ICO.stop} ${esc(p.nombre)}`, s: 'Parada · ' + p.lineas.join(' '), go: () => planTo({ lat: p.lat, lon: p.lon, name: p.nombre }) }));
   showResults([...ps, ...(raw.trim().length >= 2 ? [addItem(raw)] : [])]);
 }
 $('go').onclick = () => {
@@ -876,6 +943,7 @@ function origin(): Promise<Pt> {
 const walkMin = (m: number) => Math.max(1, Math.round(m / 75));
 const fmtM = (m: number) => (m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
 const HM = (d: Date) => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+let planning = false; // hay una ruta en pantalla: el mapa solo muestra el trayecto
 let plans: Plan[] = []; let planIdx = 0; let planFrom: Pt | null = null; let planDest: Dest | null = null;
 let tmode: 'now' | 'dep' | 'arr' = 'now'; let tval = ''; let planToken = 0;
 const profLabel = (id: string) => PROFILES.find((x) => x.id === id)?.label ?? id;
@@ -888,7 +956,7 @@ async function planTo(d: Dest) {
   const from = await origin();
   planFrom = from; planDest = d; plans = planAll(graph, from, d); planIdx = 0;
   if (plans.length) await settlePlans(from, d);
-  current = null; routeLayer.clearLayers(); $('fav').hidden = true; $('sheet').classList.remove('mini'); $('sheet').hidden = false; showHome();
+  current = null; routeLayer.clearLayers(); planning = true; stopLayer.clearLayers(); busLayer.clearLayers(); $('fav').hidden = true; $('sheet').classList.remove('mini'); $('sheet').hidden = false; showHome();
   $('sname').textContent = 'Ruta a ' + d.name;
   $('pseg').hidden = true; $('ptime').hidden = true;
   if (!plans.length) { void walkOnly(from, d); return; }
@@ -902,8 +970,8 @@ async function walkOnly(from: Pt, d: Dest) {
   const straight = dist(from, d); let m = Math.round(straight * 1.3), sec = (m / 1.25); let geo: [number, number][] | null = null;
   const pinta = () => {
     const llega = cuando(Date.now() + sec * 1000);
-    $('smeta').innerHTML = `🚶 <b>Andando: ${fmtDur(sec / 60)}</b> (${fmtM(m)}) · llegas ${llega}`;
-    $('arr').innerHTML = `<div class="step"><span class="ic">🚶</span><div>Camina <b>${fmtDur(sec / 60)}</b> (${fmtM(m)}) hasta <b>${esc(d.name)}</b><small>${straight < 1200 ? 'Está cerca: no hace falta coger el bus.' : 'No hay un trayecto en bus que mejore ir andando desde aquí.'}</small></div></div>`;
+    $('smeta').innerHTML = `${ICO.walk} <b>Andando: ${fmtDur(sec / 60)}</b> (${fmtM(m)}) · llegas ${llega}`;
+    $('arr').innerHTML = `<div class="step"><span class="ic">${ICO.walk}</span><div>Camina <b>${fmtDur(sec / 60)}</b> (${fmtM(m)}) hasta <b>${esc(d.name)}</b><small>${straight < 1200 ? 'Está cerca: no hace falta coger el bus.' : 'No hay un trayecto en bus que mejore ir andando desde aquí.'}</small></div></div>`;
   };
   pinta(); routeLayer.clearLayers();
   const line = L.polyline([[from.lat, from.lon], [d.lat, d.lon]], { color: '#8e8e93', weight: 4, dashArray: '2 8' }).addTo(routeLayer);
@@ -973,12 +1041,12 @@ const effMin = (p: Plan) => (p.nextBus != null ? Math.max(1, Math.round((arriveM
 function renderWarn(p: Plan) {
   const el = $('pwarn'); const now = Date.now(); const out: string[] = [];
   if (tmode === 'now') {
-    if (sinServicio(p)) out.push(`🚫 <b>No hay buses previstos de la línea ${esc(p.legs[0].linea)} en ${esc(p.legs[0].stops[0].nombre)}.</b><br>Puede que no circule hoy a esta hora.`);
+    if (sinServicio(p)) out.push(`${ICO.ban} <b>No hay buses previstos de la línea ${esc(p.legs[0].linea)} en ${esc(p.legs[0].stops[0].nombre)}.</b><br>Puede que no circule hoy a esta hora.`);
     const sinBus = p.nextBus != null && p.nextBus - now > 90 * 60e3;
-    if (sinBus) out.push(`🌙 <b>No hay buses de la línea ${esc(p.legs[0].linea)} hasta ${hasta(p.nextBus!)}.</b><br>Con ese bus llegarías ${cuando(arriveMs(p))}.`);
+    if (sinBus) out.push(`${ICO.moon} <b>No hay buses de la línea ${esc(p.legs[0].linea)} hasta ${hasta(p.nextBus!)}.</b><br>Con ese bus llegarías ${cuando(arriveMs(p))}.`);
     if (p.walkAlone) {
       const wArr = now + p.walkAlone.s * 1000;
-      out.push(`🚶 <b>Andando:</b> ${fmtDur(p.walkAlone.s / 60)} (${fmtM(p.walkAlone.m)}) · llegarías ${cuando(wArr)}${wArr < arriveMs(p) ? `<br>✅ <b>Te conviene ir andando</b>${sinBus ? '' : ' (llegas antes que en bus)'}.` : ''}`);
+      out.push(`${ICO.walk} <b>Andando:</b> ${fmtDur(p.walkAlone.s / 60)} (${fmtM(p.walkAlone.m)}) · llegarías ${cuando(wArr)}${wArr < arriveMs(p) ? `<br>${ICO.ok} <b>Te conviene ir andando</b>${sinBus ? '' : ' (llegas antes que en bus)'}.` : ''}`);
     }
   }
   el.innerHTML = out.map((t) => `<p>${t}</p>`).join(''); el.hidden = out.length === 0;
@@ -1045,7 +1113,7 @@ function drawPlan(p: Plan, from: Pt, to: Pt) {
 }
 
 function renderPlan(p: Plan, to: Dest) {
-  const walk = (id: string, m: number, name: string) => `<div class="step" id="${id}"><span class="ic">🚶</span><div>Camina <span class="wv">${walkMin(m)} min (${fmtM(m)})</span> hasta <b>${esc(name)}</b></div></div>`;
+  const walk = (id: string, m: number, name: string) => `<div class="step" id="${id}"><span class="ic">${ICO.walk}</span><div>Camina <span class="wv">${walkMin(m)} min (${fmtM(m)})</span> hasta <b>${esc(name)}</b></div></div>`;
   const rows: string[] = p.walkStart.m < 40 ? [] : [walk('w-start', p.walkStart.m, p.walkStart.to.nombre)];
   p.legs.forEach((l, i) => {
     const a = l.stops[0], b = l.stops.at(-1)!;
@@ -1083,12 +1151,6 @@ type Tarifa = { titulo: string; importe: number; unidad: string; destacada?: boo
 type Place = { lat: number; lon: number; name: string };
 let avisos: Aviso[] = []; let tarifas: Tarifa[] = [];
 let homeView: 'home' | 'tarifas' = 'home'; let avisosAll = false;
-const svg = (d: string) => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
-const ICO = {
-  home: svg('<path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/>'),
-  work: svg('<rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 13h17"/>'),
-  ticket: svg('<path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v2m0 3v2m0 3v2"/>'),
-};
 let places: { home?: Place; work?: Place } = {};
 try { places = JSON.parse(localStorage.getItem('places') ?? '{}'); } catch { places = {}; }
 let saving: 'home' | 'work' | null = null;
@@ -1128,7 +1190,7 @@ function renderHome() {
     <div class="quick">${place('home', ICO.home, 'Casa')}${place('work', ICO.work, 'Trabajo')}<button class="quick-b" data-act="tarifas"><span class="qi">${ICO.ticket}</span><b>Tarifas</b><small>Bonos y billetes</small></button></div>
     ${avisos.length ? `<h3 class="sec">Avisos de EMTUSA</h3><div class="avisos">${avisos.slice(0, avisosAll ? 12 : 2).map((a) => `<a class="aviso ${sevClass(a.severidad)}" href="https://www.emtusahuelva.com/avisos/${encodeURIComponent(a.slug)}" target="_blank" rel="noopener"><i></i><span><b>${esc(a.titulo)}</b><small>${fdate(a.vigenciaDesde)}${a.vigenciaDesde.slice(0, 10) !== a.vigenciaHasta.slice(0, 10) ? ' – ' + fdate(a.vigenciaHasta) : ''}</small></span></a>`).join('')}${avisos.length > 2 && !avisosAll ? `<button class="aviso more" data-act="avisos">Ver ${avisos.length - 2} más</button>` : ''}</div>` : ''}
     <div id="hal"></div>
-    ${lugares.length ? `<h3 class="sec">Mis lugares</h3><ul class="flist">${lugares.map((l, i) => `<li class="frow lugar" data-i="${i}" role="button" tabindex="0"><span class="nm">⭐ ${esc(l.n)}</span><button class="round" data-act="dellugar" data-i="${i}" aria-label="Borrar ${esc(l.n)}">✕</button></li>`).join('')}</ul>` : ''}
+    ${lugares.length ? `<h3 class="sec">Mis lugares</h3><ul class="flist">${lugares.map((l, i) => `<li class="frow lugar" data-i="${i}" role="button" tabindex="0"><span class="nm">${ICO.star} ${esc(l.n)}</span><button class="round" data-act="dellugar" data-i="${i}" aria-label="Borrar ${esc(l.n)}">✕</button></li>`).join('')}</ul>` : ''}
     <h3 class="sec">Mis paradas</h3>
     ${favRows ? `<ul class="flist">${favRows}</ul>` : '<p class="hint">Busca una parada y pulsa ☆ para tenerla aquí con sus próximos buses.</p>'}`;
   homeArrivals(); loadHomeAlarms();
